@@ -94,6 +94,10 @@ import {
   runVerificationLifecycle
 } from "./verificationLifecycle.js";
 
+import {
+ createVerificationDecision
+} from "../repositories/verificationDecisionRepository.js";
+
 
 
 /*
@@ -1618,6 +1622,7 @@ const evidenceGraph =
 
   });
 
+  
   verificationRepository.save({
 
   verificationId,
@@ -1672,6 +1677,104 @@ const evidenceGraph =
     verificationStatus.status
 
 });
+
+console.log(
+  "[DECISION] Creating verification decision",
+  {
+    verificationId,
+    email,
+    decision: decision.decision,
+    verificationStatus: verificationStatus.status,
+    confidenceScore: confidence.score,
+    confidenceLevel: confidence.level
+  }
+);
+
+createVerificationDecision({
+
+    verificationId,
+
+    email,
+
+    decision:
+        decision.decision,
+
+    verificationStatus:
+        verificationStatus.status,
+
+    confidenceScore:
+        confidence.score,
+
+    confidenceLevel:
+        confidence.level,
+
+
+    reasonCodes:
+        [
+            decision.decision,
+            verificationStatus.status
+        ],
+
+
+    evidenceSnapshot: {
+
+    smtp: {
+
+        responseCode:
+            smtp.responseCode,
+
+        mailboxExists:
+            smtp.mailboxExists,
+
+        smtpValid:
+            smtp.smtpValid,
+
+        mxAvailable:
+            smtp.mxAvailable,
+
+        provider:
+            smtp.provider,
+
+        retryRequired:
+            smtp.retryRequired
+
+    },
+
+
+    catchAll,
+
+
+    confidence: {
+
+        score:
+            confidence.score,
+
+        level:
+            confidence.level,
+
+        status:
+            confidence.status ?? null
+    },
+
+
+    patternIntelligence: {
+
+        bestPattern:
+            patternIntelligence.bestPattern ?? null
+
+    },
+
+
+        verificationStatus
+
+    },
+
+
+    engineVersion:
+        "verification-engine-v1"
+
+});
+
 
   verificationRepository.save({
   verificationId,
