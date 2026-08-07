@@ -1,0 +1,990 @@
+import {
+  getPatternHistory,
+  type PatternHistoryRecord
+} from "./patternHistory.js";
+
+/*
+==================================================
+PATTERN INTELLIGENCE ENGINE
+==================================================
+
+Purpose
+-------
+
+Read historical pattern evidence and turn it into
+structured intelligence that the recommendation
+engine can consume.
+
+Architecture:
+
+pattern_history
+       |
+       v
+patternIntelligence
+       |
+       v
+patternRecommendation
+       |
+       v
+recommended email patterns
+
+IMPORTANT:
+
+This service is READ-ONLY.
+
+It does NOT:
+
+- perform SMTP verification
+- modify pattern_history
+- create observations
+- mutate pattern records
+- make network requests
+
+Learning happens elsewhere through
+patternEvidence / patternHistory.
+
+==================================================
+*/
+
+
+/*
+==================================================
+TYPES
+==================================================
+*/
+
+export interface PatternIntelligenceInput {
+  domain: string;
+  pattern: string;
+}
+
+
+export interface PatternIntelligenceResult {
+
+  domain: string;
+
+  pattern: string;
+
+  attempts: number;
+
+  successes: number;
+
+  failures: number;
+
+  confidence: number;
+
+  successRate: number;
+
+  failureRate: number;
+
+  firstSeenAt: string | null;
+
+  lastSeenAt: string | null;
+
+  hasHistory: boolean;
+
+  /*
+  Number of observations used to
+  calculate the intelligence.
+  */
+  sampleSize: number;
+
+  /*
+  Quality classification.
+  */
+  strength:
+    | "NONE"
+    | "WEAK"
+    | "MODERATE"
+    | "STRONG"
+    | "VERY_STRONG";
+
+  /*
+  Recency signal.
+
+  0 = no history
+  1 = very recent
+  smaller values = older evidence
+  */
+  recencyScore: number;
+
+  /*
+  Composite ranking score.
+
+  This is deliberately separate
+  from historical confidence.
+  */
+  intelligenceScore: number;
+
+}
+
+
+/*
+==================================================
+RANKED PATTERN
+==================================================
+*/
+
+export interface RankedPattern
+  extends PatternIntelligenceResult {
+
+  rank: number;
+
+}
+
+
+/*
+==================================================
+NORMALIZATION
+==================================================
+*/
+
+function normalizeDomain(
+  domain: string
+): string {
+
+  return domain
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, "")
+    .replace(/^www\./, "")
+    .split("/")[0] ?? "";
+
+}
+
+
+function normalizePattern(
+  pattern: string
+): string {
+
+  return pattern
+    .trim()
+    .toLowerCase();
+
+}
+
+
+/*
+==================================================
+DATE HELPERS
+==================================================
+*/
+
+function parseTimestamp(
+  value: string | null | undefined
+): number | null {
+
+  if (!value) {
+    return null;
+  }
+
+  const timestamp =
+    Date.parse(value);
+
+  if (
+    Number.isNaN(timestamp)
+  ) {
+
+    return null;
+
+  }
+
+  return timestamp;
+
+}
+
+
+/*
+==================================================
+RECENCY
+==================================================
+
+Recent observations should contribute more
+to ranking than very old observations.
+
+Decay:
+
+0 days   = 1.00
+7 days   ≈ 0.90
+30 days  ≈ 0.70
+90 days  ≈ 0.40
+180 days ≈ 0.20
+365 days ≈ 0.05
+
+We use exponential decay rather than
+hard buckets so the score changes smoothly.
+==================================================
+*/
+
+function calculateRecencyScore(
+  lastSeenAt: string | null
+): number {
+
+  const timestamp =
+    parseTimestamp(
+      lastSeenAt
+    );
+
+  if (
+    timestamp === null
+  ) {
+
+    return 0;
+
+  }
+
+  const ageMs =
+    Math.max(
+      0,
+      Date.now() - timestamp
+    );
+
+  const ageDays =
+    ageMs /
+    (
+      1000 *
+      60 *
+      60 *
+      24
+    );
+
+  const halfLifeDays =
+    90;
+
+  const score =
+    Math.pow(
+      0.5,
+      ageDays /
+      halfLifeDays
+    );
+
+  return clamp(
+    score,
+    0,
+    1
+  );
+
+}
+
+
+/*
+==================================================
+SAMPLE STRENGTH
+==================================================
+*/
+
+function determineStrength(
+  attempts: number,
+  confidence: number
+):
+  | "NONE"
+  | "WEAK"
+  | "MODERATE"
+  | "STRONG"
+  | "VERY_STRONG" {
+
+  if (
+    attempts <= 0 ||
+    confidence <= 0
+  ) {
+
+    return "NONE";
+
+  }
+
+  if (
+    attempts >= 10 &&
+    confidence >= 90
+  ) {
+
+    return "VERY_STRONG";
+
+  }
+
+  if (
+    attempts >= 5 &&
+    confidence >= 80
+  ) {
+
+    return "STRONG";
+
+  }
+
+  if (
+    attempts >= 2 &&
+    confidence >= 60
+  ) {
+
+    return "MODERATE";
+
+  }
+
+  return "WEAK";
+
+}
+
+
+/*
+==================================================
+CLAMP
+==================================================
+*/
+
+function clamp(
+  value: number,
+  min: number,
+  max: number
+): number {
+
+  return Math.min(
+    max,
+    Math.max(
+      min,
+      value
+    )
+  );
+
+}
+
+
+/*
+==================================================
+SUCCESS RATE
+==================================================
+*/
+
+function calculateRate(
+  numerator: number,
+  denominator: number
+): number {
+
+  if (
+    denominator <= 0
+  ) {
+
+    return 0;
+
+  }
+
+  return clamp(
+    (
+      numerator /
+      denominator
+    ) * 100,
+    0,
+    100
+  );
+
+}
+
+
+/*
+==================================================
+INTELLIGENCE SCORE
+==================================================
+
+The historical confidence is authoritative
+for the learned pattern.
+
+The intelligence score adds:
+
+- confidence
+- success rate
+- sample strength
+- recency
+
+This is used for ranking.
+
+It is NOT the same as confidence.
+==================================================
+*/
+
+function calculateIntelligenceScore(
+  confidence: number,
+  successRate: number,
+  attempts: number,
+  recencyScore: number
+): number {
+
+  /*
+  Bayesian-style sample saturation.
+
+  More observations increase reliability,
+  but additional observations have diminishing
+  returns.
+  */
+
+  const sampleStrength =
+    attempts <= 0
+      ? 0
+      : 1 -
+        Math.exp(
+          -attempts / 5
+        );
+
+  /*
+  Weighted model:
+
+  confidence      45%
+  success rate    25%
+  sample strength 20%
+  recency         10%
+  */
+
+  const score =
+    (
+      confidence * 0.45
+    ) +
+    (
+      successRate * 0.25
+    ) +
+    (
+      sampleStrength *
+      100 *
+      0.20
+    ) +
+    (
+      recencyScore *
+      100 *
+      0.10
+    );
+
+  return Math.round(
+    clamp(
+      score,
+      0,
+      100
+    )
+  );
+
+}
+
+
+/*
+==================================================
+EMPTY INTELLIGENCE
+==================================================
+*/
+
+function emptyIntelligence(
+  domain: string,
+  pattern: string
+): PatternIntelligenceResult {
+
+  return {
+
+    domain,
+
+    pattern,
+
+    attempts: 0,
+
+    successes: 0,
+
+    failures: 0,
+
+    confidence: 0,
+
+    successRate: 0,
+
+    failureRate: 0,
+
+    firstSeenAt: null,
+
+    lastSeenAt: null,
+
+    hasHistory: false,
+
+    sampleSize: 0,
+
+    strength: "NONE",
+
+    recencyScore: 0,
+
+    intelligenceScore: 0
+
+  };
+
+}
+
+
+/*
+==================================================
+CONVERT HISTORY -> INTELLIGENCE
+==================================================
+*/
+
+function historyToIntelligence(
+  history: PatternHistoryRecord
+): PatternIntelligenceResult {
+
+  const attempts =
+    Math.max(
+      0,
+      Number(
+        history.attempts
+      ) || 0
+    );
+
+  const successes =
+    Math.max(
+      0,
+      Number(
+        history.successes
+      ) || 0
+    );
+
+  const failures =
+    Math.max(
+      0,
+      Number(
+        history.failures
+      ) || 0
+    );
+
+  /*
+  Protect against corrupt historical data.
+  */
+
+  const normalizedSuccesses =
+    Math.min(
+      successes,
+      attempts
+    );
+
+  const normalizedFailures =
+    Math.min(
+      failures,
+      attempts
+    );
+
+  const confidence =
+    clamp(
+      Number(
+        history.confidence
+      ) || 0,
+      0,
+      100
+    );
+
+  const successRate =
+    calculateRate(
+      normalizedSuccesses,
+      attempts
+    );
+
+  const failureRate =
+    calculateRate(
+      normalizedFailures,
+      attempts
+    );
+
+  const recencyScore =
+    calculateRecencyScore(
+      history.lastSeenAt
+    );
+
+  const strength =
+    determineStrength(
+      attempts,
+      confidence
+    );
+
+  const intelligenceScore =
+    calculateIntelligenceScore(
+      confidence,
+      successRate,
+      attempts,
+      recencyScore
+    );
+
+  return {
+
+    domain:
+      normalizeDomain(
+        history.domain
+      ),
+
+    pattern:
+      normalizePattern(
+        history.pattern
+      ),
+
+    attempts,
+
+    successes:
+      normalizedSuccesses,
+
+    failures:
+      normalizedFailures,
+
+    confidence,
+
+    successRate,
+
+    failureRate,
+
+    firstSeenAt:
+      history.firstSeenAt ??
+      null,
+
+    lastSeenAt:
+      history.lastSeenAt ??
+      null,
+
+    hasHistory:
+      attempts > 0,
+
+    sampleSize:
+      attempts,
+
+    strength,
+
+    recencyScore,
+
+    intelligenceScore
+
+  };
+
+}
+
+
+/*
+==================================================
+GET SINGLE PATTERN INTELLIGENCE
+==================================================
+*/
+
+export function getPatternIntelligence(
+  input: PatternIntelligenceInput
+): PatternIntelligenceResult {
+
+  const domain =
+    normalizeDomain(
+      input.domain
+    );
+
+  const pattern =
+    normalizePattern(
+      input.pattern
+    );
+
+  if (
+    !domain ||
+    !pattern
+  ) {
+
+    return emptyIntelligence(
+      domain,
+      pattern
+    );
+
+  }
+
+  const history =
+    getPatternHistory(
+      domain,
+      pattern
+    );
+
+  if (!history) {
+
+    return emptyIntelligence(
+      domain,
+      pattern
+    );
+
+  }
+
+  return historyToIntelligence(
+    history
+  );
+
+}
+
+
+/*
+==================================================
+GET SINGLE PATTERN
+==================================================
+
+Compatibility alias.
+
+Some older code may call:
+
+getPatternPatternIntelligence()
+
+Keep this temporarily so the architecture
+can evolve without breaking consumers.
+==================================================
+*/
+
+export function getPatternPatternIntelligence(
+  domain: string,
+  pattern: string
+): PatternIntelligenceResult {
+
+  return getPatternIntelligence({
+    domain,
+    pattern
+  });
+
+}
+
+
+/*
+==================================================
+RANK PATTERNS
+==================================================
+*/
+
+export function recommendPatterns(
+  domain: string,
+  patterns: string[]
+): RankedPattern[] {
+
+  const normalizedDomain =
+    normalizeDomain(
+      domain
+    );
+
+  const uniquePatterns =
+    Array.from(
+      new Set(
+        patterns
+          .map(
+            normalizePattern
+          )
+          .filter(
+            Boolean
+          )
+      )
+    );
+
+  const ranked =
+    uniquePatterns
+      .map(
+        (
+          pattern
+        ) =>
+          getPatternIntelligence({
+            domain:
+              normalizedDomain,
+
+            pattern
+          })
+      )
+      .sort(
+        (
+          a,
+          b
+        ) => {
+
+          /*
+          Primary:
+          intelligence score
+          */
+
+          if (
+            b.intelligenceScore !==
+            a.intelligenceScore
+          ) {
+
+            return (
+              b.intelligenceScore -
+              a.intelligenceScore
+            );
+
+          }
+
+          /*
+          Secondary:
+          historical confidence
+          */
+
+          if (
+            b.confidence !==
+            a.confidence
+          ) {
+
+            return (
+              b.confidence -
+              a.confidence
+            );
+
+          }
+
+          /*
+          Tertiary:
+          successful observations
+          */
+
+          if (
+            b.successes !==
+            a.successes
+          ) {
+
+            return (
+              b.successes -
+              a.successes
+            );
+
+          }
+
+          /*
+          Final:
+          more recent pattern wins
+          */
+
+          const aTime =
+            parseTimestamp(
+              a.lastSeenAt
+            ) ?? 0;
+
+          const bTime =
+            parseTimestamp(
+              b.lastSeenAt
+            ) ?? 0;
+
+          return (
+            bTime -
+            aTime
+          );
+
+        }
+      );
+
+  return ranked.map(
+    (
+      intelligence,
+      index
+    ) => ({
+
+      ...intelligence,
+
+      rank:
+        index + 1
+
+    })
+  );
+
+}
+
+
+/*
+==================================================
+GET BEST PATTERN
+==================================================
+*/
+
+export function getBestPattern(
+  domain: string,
+  patterns: string[]
+): RankedPattern | null {
+
+  const ranked =
+    rankPatterns(
+      domain,
+      patterns
+    );
+
+  return (
+    ranked[0] ??
+    null
+  );
+
+}
+
+
+/*
+==================================================
+GET ALL HISTORICAL PATTERNS
+==================================================
+
+This function intentionally uses the pattern list
+provided by the caller.
+
+The intelligence layer should not invent
+patterns or perform discovery.
+==================================================
+*/
+
+export function getPatternIntelligenceBatch(
+  domain: string,
+  patterns: string[]
+): PatternIntelligenceResult[] {
+
+  const normalizedDomain =
+    normalizeDomain(
+      domain
+    );
+
+  return patterns
+    .map(
+      (
+        pattern
+      ) =>
+        getPatternIntelligence({
+          domain:
+            normalizedDomain,
+
+          pattern
+        })
+    );
+
+}
+
+
+/*
+==================================================
+DEFAULT PATTERN CATALOG
+==================================================
+
+These are common B2B email patterns.
+
+The recommendation engine can use this catalog
+when no custom pattern set is supplied.
+==================================================
+*/
+
+export const DEFAULT_EMAIL_PATTERNS: string[] = [
+
+  "first@domain",
+
+  "first.last@domain",
+
+  "firstlast@domain",
+
+  "flast@domain",
+
+  "f.last@domain",
+
+  "first_l@domain",
+
+  "first@domain.com",
+
+  "last@domain",
+
+  "last.first@domain",
+
+  "first.middle.last@domain"
+
+];
+
+
+/*
+==================================================
+GET BEST KNOWN PATTERN
+==================================================
+*/
+
+export function getBestKnownPattern(
+  domain: string
+): RankedPattern | null {
+
+  return getBestPattern(
+    domain,
+    DEFAULT_EMAIL_PATTERNS
+  );
+
+}
