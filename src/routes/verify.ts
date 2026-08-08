@@ -4,6 +4,8 @@ import type {
   FastifyRequest,
 } from "fastify";
 
+import mailchecker from "mailchecker";
+
 import { verifyEmail } from "../services/emailVerificationOrchestrator.js";
 
 import {
@@ -295,77 +297,17 @@ function isDisposableEmail(
   email: string
 ): boolean {
   try {
-    const checker =
-      requireMailcheckerModule();
-
     /*
-    Supported shapes:
-
-        function(email)
-
-    or:
-
-        {
-          isDisposable(email)
-        }
-
-    or:
-
-        {
-          default(email)
-        }
-
-    or:
-
-        {
-          default: {
-            isDisposable(email)
-          }
-        }
+    mailchecker's isValid() returns false for
+    disposable/blacklisted addresses (and for
+    syntactically invalid ones, which is already
+    handled separately above). A disposable email
+    is therefore one that mailchecker rejects.
     */
 
-    if (
-      typeof checker === "function"
-    ) {
-      return Boolean(
-        checker(email)
-      );
-    }
-
-    if (
-      typeof checker?.isDisposable ===
-      "function"
-    ) {
-      return Boolean(
-        checker.isDisposable(
-          email
-        )
-      );
-    }
-
-    if (
-      typeof checker?.default ===
-      "function"
-    ) {
-      return Boolean(
-        checker.default(
-          email
-        )
-      );
-    }
-
-    if (
-      typeof checker?.default?.isDisposable ===
-      "function"
-    ) {
-      return Boolean(
-        checker.default.isDisposable(
-          email
-        )
-      );
-    }
-
-    return false;
+    return !mailchecker.isValid(
+      email
+    );
   } catch (
     error: unknown
   ) {
@@ -383,33 +325,6 @@ function isDisposableEmail(
 
     return false;
   }
-}
-
-/*
-==================================================
-MAILCHECKER MODULE ADAPTER
-==================================================
-*/
-
-function requireMailcheckerModule(): any {
-  /*
-  Keep compatibility with the existing project's
-  module configuration.
-
-  The package is optional from the route's point
-  of view.
-  */
-
-  const dynamicRequire =
-    eval(
-      "require"
-    ) as (
-      moduleName: string
-    ) => unknown;
-
-  return dynamicRequire(
-    "mailchecker"
-  );
 }
 
 /*

@@ -10,26 +10,34 @@ import {
 } from "./migrations.js";
 
 
-const dataDirectory =
-  path.resolve(
-    process.cwd(),
-    "data"
-  );
+/*
+DATABASE_PATH allows tests and deployments to point
+at an isolated database file instead of the default
+local development path.
+*/
+
+const databasePath =
+  process.env.DATABASE_PATH
+    ? path.resolve(
+        process.env.DATABASE_PATH
+      )
+    : path.join(
+        path.resolve(
+          process.cwd(),
+          "data"
+        ),
+        "email-intelligence.db"
+      );
 
 
 fs.mkdirSync(
-  dataDirectory,
+  path.dirname(
+    databasePath
+  ),
   {
     recursive:true
   }
 );
-
-
-const databasePath =
-  path.join(
-    dataDirectory,
-    "email-intelligence.db"
-  );
 
 
 export type DatabaseConnection =

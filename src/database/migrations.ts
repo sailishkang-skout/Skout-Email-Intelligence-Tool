@@ -16,7 +16,7 @@ export function runMigrations(
 
       id TEXT PRIMARY KEY,
 
-      applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      executed_at TEXT NOT NULL DEFAULT (CURRENT_TIMESTAMP)
 
     );
 

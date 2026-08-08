@@ -1,6 +1,4 @@
-import Database from "better-sqlite3";
-import path from "node:path";
-import fs from "node:fs";
+import { getDatabase } from "../database/database.js";
 
 /*
 ==================================================
@@ -50,39 +48,16 @@ candidate ranking
 ==================================================
 DATABASE
 ==================================================
+
+Uses the shared application database connection
+rather than opening a second connection to the
+same file. A second raw connection would bypass
+the shared WAL/busy_timeout configuration and risk
+lock contention under load.
+==================================================
 */
 
-const dataDirectory =
-  path.resolve(
-    process.cwd(),
-    "data"
-  );
-
-fs.mkdirSync(
-  dataDirectory,
-  {
-    recursive: true
-  }
-);
-
-const databasePath =
-  path.join(
-    dataDirectory,
-    "email-intelligence.db"
-  );
-
-const db =
-  new Database(
-    databasePath,
-    {
-      readonly: true,
-      fileMustExist: true
-    }
-  );
-
-db.pragma(
-  "foreign_keys = ON"
-);
+const db = getDatabase();
 
 /*
 ==================================================
@@ -1930,16 +1905,10 @@ export function getPatternPatternIntelligence(
 ==================================================
 SHUTDOWN
 ==================================================
+
+This module shares the application's single
+database connection (see src/database/database.ts).
+Closing it is owned by closeDatabase() there, not
+by this module.
+==================================================
 */
-
-export function closePatternIntelligenceDatabase(): void {
-
-  if (
-    db.open
-  ) {
-
-    db.close();
-
-  }
-
-}

@@ -1,65 +1,6 @@
 import type { FastifyInstance } from "fastify";
 
-import mailchecker from "mailchecker";
-
-import { verifyEmail } from "../services/emailVerificationOrchestrator.js";
-
-
-/*
-==================================================
-MAILCHECKER ADAPTER
-==================================================
-*/
-
-function isDisposableEmail(
-  domain: string
-): boolean {
-
-  const checker =
-    mailchecker as unknown as {
-
-      isDisposable?: (
-        domain: string
-      ) => boolean;
-
-      default?: {
-
-        isDisposable?: (
-          domain: string
-        ) => boolean;
-
-      };
-
-    };
-
-
-  if (
-    typeof checker.isDisposable ===
-    "function"
-  ) {
-
-    return checker.isDisposable(
-      domain
-    );
-
-  }
-
-
-  if (
-    typeof checker.default?.isDisposable ===
-    "function"
-  ) {
-
-    return checker.default.isDisposable(
-      domain
-    );
-
-  }
-
-
-  return false;
-
-}
+import { verifyBatch } from "../services/batchVerification.js";
 
 
 /*
@@ -79,7 +20,14 @@ interface BatchRequestBody {
 ==================================================
 ROUTE
 ==================================================
+
+Delegates to the canonical batchVerification service,
+which bounds SMTP concurrency and retries transient
+failures. This route owns only HTTP concerns.
+==================================================
 */
+
+const MAX_BATCH_SIZE = 100;
 
 export default async function verifyBatchRoutes(
   app: FastifyInstance
@@ -119,16 +67,11 @@ export default async function verifyBatchRoutes(
       /*
       ----------------------------------------------
       LIMIT
+
+      Prevent a single request from opening an
+      unbounded number of SMTP connections.
       ----------------------------------------------
-
-      Prevent accidental huge requests.
-
-      This can later be moved into configuration.
       */
-
-      const MAX_BATCH_SIZE =
-        100;
-
 
       if (
         emails.length >
@@ -147,12 +90,6 @@ export default async function verifyBatchRoutes(
       }
 
 
-      /*
-      ----------------------------------------------
-      EMPTY BATCH
-      ----------------------------------------------
-      */
-
       if (
         emails.length === 0
       ) {
@@ -170,140 +107,17 @@ export default async function verifyBatchRoutes(
       }
 
 
-      /*
-      ----------------------------------------------
-      PROCESS
-      ----------------------------------------------
-      */
+      const { total, results } =
+        await verifyBatch({
+          emails
+        });
 
-      const results =
-        await Promise.all(
-
-          emails.map(
-            async (
-              rawEmail
-            ) => {
-
-              const email =
-                typeof rawEmail ===
-                "string"
-                  ? rawEmail
-                      .trim()
-                      .toLowerCase()
-                  : "";
-
-
-              if (!email) {
-
-                return {
-
-                  success: false,
-
-                  email:
-                    rawEmail,
-
-                  error:
-                    "Invalid email"
-
-                };
-
-              }
-
-
-              const emailParts =
-                email.split("@");
-
-
-              if (
-                emailParts.length !== 2 ||
-                !emailParts[1]
-              ) {
-
-                return {
-
-                  success: false,
-
-                  email,
-
-                  error:
-                    "Invalid email address"
-
-                };
-
-              }
-
-
-              const domain =
-                emailParts[1]
-                  .trim()
-                  .toLowerCase();
-
-
-              const disposable =
-                isDisposableEmail(
-                  domain
-                );
-
-
-              try {
-
-                const result =
-                  await verifyEmail(
-                    email
-                  );
-
-
-                return {
-
-                  ...result,
-
-                  disposable
-
-                };
-
-              } catch (error) {
-
-                const message =
-                  error instanceof Error
-                    ? error.message
-                    : "Email verification failed";
-
-
-                return {
-
-                  success: false,
-
-                  email,
-
-                  domain,
-
-                  disposable,
-
-                  error:
-                    message
-
-                };
-
-              }
-
-            }
-          )
-
-        );
-
-
-      /*
-      ----------------------------------------------
-      RESPONSE
-      ----------------------------------------------
-      */
 
       return {
 
         success: true,
 
-        count:
-          results.length,
+        count: total,
 
         results
 

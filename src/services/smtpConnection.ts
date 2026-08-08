@@ -1,5 +1,7 @@
 import net from "node:net";
 
+import { resolvePublicAddress } from "./ssrfGuard.js";
+
 export interface SMTPServerResponse {
   code: number | null;
   message: string;
@@ -79,6 +81,21 @@ export class SMTPConnection {
     }
 
     await this.close();
+
+    /*
+    Resolve to a concrete, validated public IP before
+    connecting. This protects against both direct
+    host injection (e.g. a debug endpoint accepting a
+    raw host) and indirect SSRF via a malicious MX
+    record pointing at an internal address. Connecting
+    to the resolved IP (rather than the hostname)
+    prevents a DNS-rebinding bypass of this check.
+    */
+
+    const targetAddress =
+      await resolvePublicAddress(
+        this.host
+      );
 
     const socket =
       new net.Socket();
@@ -186,7 +203,7 @@ export class SMTPConnection {
 
         socket.connect(
           this.port,
-          this.host
+          targetAddress
         );
 
       }

@@ -283,15 +283,20 @@ DO UPDATE SET
   ):VerificationResultRecord|null {
 
 
-    return this.queryOne<VerificationResultRecord>(
+    const row =
+      this.queryOne<VerificationResultRecord>(
 `
 SELECT *
 FROM verification_results
 WHERE verification_id = ?
 LIMIT 1
 `,
-      verificationId
-    );
+        verificationId
+      );
+
+    return row
+      ? this.normalizeRow(row)
+      : null;
 
   }
 
@@ -309,7 +314,8 @@ LIMIT 1
   ):VerificationResultRecord|null {
 
 
-    return this.queryOne<VerificationResultRecord>(
+    const row =
+      this.queryOne<VerificationResultRecord>(
 `
 SELECT *
 FROM verification_results
@@ -317,8 +323,12 @@ WHERE email = ?
 ORDER BY created_at DESC
 LIMIT 1
 `,
-      this.normalizeEmail(email)
-    );
+        this.normalizeEmail(email)
+      );
+
+    return row
+      ? this.normalizeRow(row)
+      : null;
 
   }
 
@@ -344,7 +354,50 @@ WHERE domain = ?
 ORDER BY created_at DESC
 `,
       this.normalizeDomain(domain)
+    ).map(
+      row => this.normalizeRow(row)
     );
+
+  }
+
+
+
+  /*
+  ==================================================
+  NORMALIZE ROW
+  ==================================================
+
+  better-sqlite3 returns SQLite integers (0/1/null)
+  for the boolean columns, not JS booleans. Callers
+  (including strict type guards in the send-eligibility
+  policy) rely on real booleans, so normalize here once
+  rather than at every call site.
+  */
+
+  private normalizeRow(
+    row:VerificationResultRecord
+  ):VerificationResultRecord {
+
+    return {
+
+      ...row,
+
+      smtp_valid:
+        this.nullableBool(row.smtp_valid),
+
+      mailbox_exists:
+        this.nullableBool(row.mailbox_exists),
+
+      mx_available:
+        this.nullableBool(row.mx_available),
+
+      catch_all:
+        this.nullableBool(row.catch_all),
+
+      retry_required:
+        this.nullableBool(row.retry_required)
+
+    };
 
   }
 
@@ -396,10 +449,5 @@ WHERE verification_id = ?
     );
 
   }
-  /*
-  ==================================================
-  FIND BY VERIFICATION ID
-  ==================================================
-  */
 
 }

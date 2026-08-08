@@ -65,16 +65,6 @@ export function createVerificationDecision(
     const createdAt =
         new Date().toISOString();
 
-console.log(
-  "[DECISION LEDGER] inserting",
-  {
-    verificationId: input.verificationId,
-    email: input.email,
-    decision: input.decision,
-    status: input.verificationStatus
-  }
-);
-
     db.prepare(
         `
         INSERT INTO verification_decisions
@@ -119,11 +109,6 @@ console.log(
     JSON.stringify(input.evidenceSnapshot),
     input.engineVersion,
     createdAt
-);
-
-console.log(
-  "[DECISION LEDGER] inserted",
-  id
 );
 
     return {

@@ -48,12 +48,16 @@ export async function createVerificationJob(
   const db = getDatabase();
 
   const normalizedEmails =
-    emails
-      .map(
-        email =>
-          email.trim().toLowerCase()
+    [
+      ...new Set(
+        emails
+          .map(
+            email =>
+              email.trim().toLowerCase()
+          )
+          .filter(Boolean)
       )
-      .filter(Boolean);
+    ];
 
   if (!normalizedEmails.length) {
     throw new Error(

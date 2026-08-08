@@ -1,136 +1,29 @@
-import fs from "node:fs";
-import path from "node:path";
+/*
+==================================================
+MIGRATION CLI
+==================================================
 
-import {
-  getDatabase
-} from "../database/database.js";
+Thin CLI entry point for running database
+migrations outside of normal server startup
+(e.g. in CI/CD or a deploy step).
 
+This intentionally delegates to the canonical
+migration runner in src/database/migrations.ts.
 
-const db =
-  getDatabase();
+There must be only one migration implementation.
+==================================================
+*/
 
+import { getDatabase, closeDatabase } from "../database/database.js";
 
-const migrationsDirectory =
-  path.resolve(
-    process.cwd(),
-    "src/db/migrations"
-  );
+// Importing database.ts already runs migrations as
+// a side effect (see src/database/database.ts). This
+// entry point exists so migrations can be run/verified
+// explicitly (e.g. `npm run migrate`) without starting
+// the HTTP server.
 
+getDatabase();
 
-db.exec(`
-CREATE TABLE IF NOT EXISTS migrations (
+console.log("Database migrations complete.");
 
-  id TEXT PRIMARY KEY,
-
-  executed_at TEXT NOT NULL
-
-);
-`);
-
-
-const applied =
-  new Set(
-    (
-      db.prepare(
-        `
-        SELECT id
-        FROM migrations
-        `
-      )
-      .all() as {
-        id:string
-      }[]
-    )
-    .map(
-      row => row.id
-    )
-  );
-
-
-const migrationFiles =
-  fs.readdirSync(
-    migrationsDirectory
-  )
-  .filter(
-    file =>
-      file.endsWith(".sql")
-  )
-  .sort();
-
-
-for (
-  const file
-  of migrationFiles
-) {
-
-
-  if (
-    applied.has(file)
-  ) {
-    console.log(
-      `Skipping ${file}`
-    );
-
-    continue;
-  }
-
-
-  const sql =
-    fs.readFileSync(
-      path.join(
-        migrationsDirectory,
-        file
-      ),
-      "utf8"
-    );
-
-
-  console.log(
-    `Running ${file}`
-  );
-
-
-  const runMigration =
-    db.transaction(
-      () => {
-
-        db.exec(sql);
-
-
-        db.prepare(
-          `
-          INSERT INTO migrations
-          (
-            id,
-            executed_at
-          )
-          VALUES
-          (
-            ?,
-            ?
-          )
-          `
-        )
-        .run(
-          file,
-          new Date()
-            .toISOString()
-        );
-
-      }
-    );
-
-
-  runMigration();
-
-
-  console.log(
-    `Completed ${file}`
-  );
-
-}
-
-
-console.log(
-  "Database migrations complete."
-);
+closeDatabase();

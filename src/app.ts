@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
 import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
 
 import verifyRoutes from "./routes/verify.js";
 import verifyBatchRoutes from "./routes/verifyBatch.js";
@@ -12,9 +13,15 @@ import sendRoutes from "./routes/send.js";
 import emailDiscoveryRoutes from "./routes/emailDiscovery.js";
 import cacheRoutes from "./routes/cache.js";
 import evidenceLedgerRoutes from "./routes/evidenceLedger.js";
+import healthRoutes from "./routes/health.js";
 
 const app = Fastify({
 logger: true,
+// Explicit request body cap. This service never legitimately
+// needs large payloads (batch verification is capped separately
+// at the route level), so bound it to stop oversized requests
+// from consuming memory.
+bodyLimit: 1024 * 1024, // 1MB
 });
 
 await app.register(cors, {
@@ -22,6 +29,16 @@ origin: true,
 });
 
 await app.register(helmet);
+
+// Baseline abuse protection. This service performs live SMTP/DNS
+// lookups against third-party mail servers on behalf of callers,
+// so unrestricted request volume is a real abuse vector (both
+// against this service's own resources and against the mail
+// servers it queries). Tunable per deployment via env vars.
+await app.register(rateLimit, {
+max: Number(process.env.RATE_LIMIT_MAX ?? 120),
+timeWindow: process.env.RATE_LIMIT_WINDOW ?? "1 minute",
+});
 
 await app.register(verifyRoutes);
 await app.register(verifyBatchRoutes);
@@ -36,20 +53,13 @@ await app.register(sendRoutes);
 await app.register(emailDiscoveryRoutes);
 await app.register(cacheRoutes);
 await app.register(evidenceLedgerRoutes);
+await app.register(healthRoutes);
 
 app.get("/", async () => {
 return {
 service: "Email Intelligence Service",
 version: "1.0.0",
 status: "running",
-};
-});
-
-app.get("/health", async () => {
-return {
-status: "ok",
-service: "email-verifier",
-timestamp: new Date().toISOString(),
 };
 });
 

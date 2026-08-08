@@ -70,12 +70,50 @@ import type {
 
 import {
   sendOutboundEmail,
-  isAuthoritativeVerificationRecord,
 } from "../services/outboundEmailService.js";
 
 import {
   MockEmailSendProvider,
 } from "../services/mockEmailSendProvider.js";
+
+import {
+  VerificationRepository,
+} from "../repositories/verificationRepository.js";
+
+import {
+  buildVerificationStatus,
+} from "../services/verificationStatus.js";
+
+import {
+  createAuthoritativeVerificationRecord,
+  type AuthoritativeVerificationRecord,
+} from "../services/sendEligibility.js";
+
+/*
+==================================================
+VERIFICATION FRESHNESS
+==================================================
+
+How long a persisted verification result remains
+usable to authorize an outbound send. Configurable
+so operators can tighten/loosen this without a code
+change.
+==================================================
+*/
+
+const VERIFICATION_TTL_MS =
+  (
+    Number(
+      process.env.VERIFICATION_TTL_DAYS
+    ) || 30
+  ) *
+  24 *
+  60 *
+  60 *
+  1000;
+
+const verificationRepository =
+  new VerificationRepository();
 
 /*
 ==================================================
@@ -95,7 +133,7 @@ interface SendRequestBody {
 
   html?: unknown;
 
-  verification?: unknown;
+  verificationId?: unknown;
 }
 
 /*
@@ -401,43 +439,63 @@ export default async function sendRoutes(
       ==============================================
       4. AUTHORITATIVE VERIFICATION
       ==============================================
-      
-      We require the complete authoritative
-      verification record.
 
-      We intentionally do NOT accept a raw
-      VerificationStatusResult.
+      CRITICAL SECURITY BOUNDARY:
 
-      The authoritative record contains:
-
-          verificationId
-          emailAddress
-          verifiedAt
-          expiresAt
-          verifierVersion
-          authoritative
-
-      Production should eventually retrieve this
-      from trusted persistence using verificationId.
-
-      The client must NEVER be able to simply
-      claim:
+      The route must NEVER accept a verification
+      record (or the `authoritative` flag) directly
+      from the request body. A caller could otherwise
+      simply assert:
 
           authoritative: true
+          status: "VERIFIED"
+
+      and bypass the entire verification pipeline.
+
+      Instead the caller supplies only a
+      verificationId, and the server looks up the
+      trusted, persisted verification result and
+      reconstructs the authoritative record from it.
       ==============================================
       */
 
+      const verificationId =
+        optionalString(
+          body.verificationId
+        );
+
       if (
-        !isAuthoritativeVerificationRecord(
-          body.verification
-        )
+        !verificationId
+      ) {
+
+        return reply
+          .code(400)
+          .send({
+            success: false,
+
+            email,
+
+            error:
+              "verificationId is required",
+          });
+      }
+
+      const persistedVerification =
+        verificationRepository.findByVerificationId(
+          verificationId
+        );
+
+      if (
+        !persistedVerification
       ) {
 
         request.log.warn(
           {
             email,
+
+            verificationId,
           },
-          "[SendRoute] Missing or invalid authoritative verification record"
+          "[SendRoute] No persisted verification found for verificationId"
         );
 
         return reply
@@ -448,24 +506,18 @@ export default async function sendRoutes(
             email,
 
             error:
-              "verification must be a valid authoritative verification record",
+              "No verification result was found for the supplied verificationId",
           });
       }
-
-      const verification =
-        body.verification;
 
       /*
       ==============================================
       5. VERIFIED EMAIL CONSISTENCY
       ==============================================
 
-      The verification record belongs to one
-      specific email address.
-
-      It must match the actual recipient.
-
-      This prevents:
+      The persisted verification record belongs to
+      one specific email address. It must match the
+      actual recipient. This prevents:
 
           verified person A
               ↓
@@ -476,7 +528,7 @@ export default async function sendRoutes(
 
       const verifiedEmail =
         normalizeEmail(
-          verification.emailAddress
+          persistedVerification.email
         );
 
       if (
@@ -490,8 +542,7 @@ export default async function sendRoutes(
 
             verifiedEmail,
 
-            verificationId:
-              verification.verificationId,
+            verificationId,
           },
           "[SendRoute] Verification email does not match recipient"
         );
@@ -504,9 +555,77 @@ export default async function sendRoutes(
             email,
 
             error:
-              "verification emailAddress does not match email",
+              "verification does not belong to the recipient email address",
           });
       }
+
+      /*
+      ==============================================
+      5b. RECONSTRUCT AUTHORITATIVE RECORD
+      ==============================================
+
+      Rebuild the canonical VerificationStatusResult
+      from the persisted, server-produced evidence
+      (never from client input), then mint the
+      authoritative record server-side.
+      ==============================================
+      */
+
+      const verificationStatus =
+        buildVerificationStatus({
+
+          mxAvailable:
+            persistedVerification.mx_available ?? false,
+
+          responseCode:
+            persistedVerification.response_code,
+
+          responseMessage:
+            persistedVerification.response_message,
+
+          mailboxExists:
+            persistedVerification.mailbox_exists ?? false,
+
+          smtpValid:
+            persistedVerification.smtp_valid ?? false,
+
+          catchAll:
+            persistedVerification.catch_all ?? false,
+
+          retryRequired:
+            persistedVerification.retry_required ?? false,
+
+          retryReason:
+            persistedVerification.retry_reason,
+        });
+
+      const verifiedAt =
+        persistedVerification.updated_at;
+
+      const expiresAt =
+        new Date(
+          new Date(verifiedAt).getTime() +
+            VERIFICATION_TTL_MS
+        ).toISOString();
+
+      const verification: AuthoritativeVerificationRecord =
+        createAuthoritativeVerificationRecord(
+          verificationStatus,
+          {
+            verificationId:
+              persistedVerification.verification_id,
+
+            emailAddress:
+              persistedVerification.email,
+
+            verifiedAt,
+
+            expiresAt,
+
+            verifierVersion:
+              "verification-engine-v1",
+          }
+        );
 
       /*
       ==============================================

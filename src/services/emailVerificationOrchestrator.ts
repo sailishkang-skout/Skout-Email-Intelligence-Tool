@@ -26,10 +26,6 @@ import {
 } from "./verificationAttemptHistory.js";
 
 import {
-  getPatternHistory
-} from "./patternHistory.js";
-
-import {
   evaluatePatternEvidence
 } from "./patternEvidence.js";
 
@@ -91,10 +87,6 @@ const verificationEventRepository =
   new VerificationEventRepository();
 
 import {
-  runVerificationLifecycle
-} from "./verificationLifecycle.js";
-
-import {
  createVerificationDecision
 } from "../repositories/verificationDecisionRepository.js";
 
@@ -105,22 +97,6 @@ import {
 NORMALIZED TYPES
 ==================================================
 */
-
-
-
-interface NormalizedPatternIntelligence {
-
-  available:boolean;
-
-  score:number|null;
-
-  successRate:number|null;
-
-  attempts:number;
-
-  recommendation:string|null;
-
-}
 
 
 
@@ -226,69 +202,6 @@ function normalizeDomain(
     )
     .split("/")[0]
     ?.trim() ?? "";
-
-}
-
-
-
-/*
-==================================================
-PATTERN INTELLIGENCE NORMALIZER
-==================================================
-*/
-
-
-
-function normalizePatternIntelligence(
-  raw:unknown
-):NormalizedPatternIntelligence|null {
-
-
-  if(
-    !raw ||
-    typeof raw !== "object"
-  ){
-
-    return null;
-
-  }
-
-
-  const value =
-    raw as Record<string,unknown>;
-
-
-
-  return {
-
-
-    available:true,
-
-
-    score:
-      typeof value.score === "number"
-        ? value.score
-        : null,
-
-
-    successRate:
-      typeof value.successRate === "number"
-        ? value.successRate
-        : null,
-
-
-    attempts:
-      typeof value.attempts === "number"
-        ? value.attempts
-        : 0,
-
-
-    recommendation:
-      typeof value.recommendation === "string"
-        ? value.recommendation
-        : null
-
-  };
 
 }
 
@@ -669,103 +582,6 @@ function buildRecommendation(
 }
 /*
 ==================================================
-PATTERN HISTORY
-==================================================
-*/
-
-async function getHistoricalPatternEvidence(
-  domain:string,
-  pattern:string|null
-){
-
-  if(!pattern){
-
-    return {
-      attempts:0,
-      successes:0,
-      failures:0,
-      successRate:null
-    };
-
-  }
-
-
-  try {
-
-    const history =
-      await getPatternHistory(
-        normalizeDomain(domain),
-        pattern.trim().toLowerCase()
-      );
-
-
-    if(!history){
-
-      return {
-        attempts:0,
-        successes:0,
-        failures:0,
-        successRate:null
-      };
-
-    }
-
-
-    const attempts =
-      Number(history.attempts) || 0;
-
-
-    const successes =
-      Number(history.successes) || 0;
-
-
-    const failures =
-      Number(history.failures) || 0;
-
-
-    return {
-
-      attempts,
-
-      successes,
-
-      failures,
-
-      successRate:
-        attempts > 0
-          ? successes / attempts
-          : null
-
-    };
-
-
-  }
-  catch(error){
-
-    console.error(
-      "[PatternHistory] Failed reading history:",
-      error
-    );
-
-
-    return {
-
-      attempts:0,
-
-      successes:0,
-
-      failures:0,
-
-      successRate:null
-
-    };
-
-  }
-
-}
-
-/*
-==================================================
 MAIN VERIFICATION FUNCTION
 ==================================================
 */
@@ -816,15 +632,6 @@ const requestId =
 
 const verificationId =
   randomUUID();
-
-  console.log(
-  "[EVENT TEST] Creating START event",
-  {
-    verificationId,
-    email,
-    domain
-  }
-);
 
 verificationEventRepository.createEvent({
 
@@ -1351,11 +1158,6 @@ const confidence =
 });
 
 
-console.log(
-  "DECISION EVENT CREATED",
-  "STARTED"
-);
-
   /*
 ==================================================
 EVIDENCE WEIGHTING ENGINE
@@ -1450,43 +1252,6 @@ const evidenceWeights =
 
   });
 
-  await runVerificationLifecycle({
-
-  email,
-
-domain:
-  extractDomain(email),
-
-  confidenceScore:
-    confidence.score,
-
-
-  smtpValid:
-    smtp.smtpValid,
-
-
-  mailboxExists:
-    smtp.mailboxExists,
-
-
-  catchAll,
-
-
-  disposable:
-    false,
-
-
-  patternRiskLevel:
-    patternIntelligence.bestPattern
-      ?.riskLevel ?? null,
-
-
-  patternScore:
-  patternIntelligence.bestPattern
-    ?.reliabilityScore ?? undefined
-
-});
-
   const decision =
   buildVerificationDecision({
 
@@ -1553,11 +1318,6 @@ const recommendation =
 
   });
 
-
-console.log(
-  "DECISION EVENT CREATED",
-  "COMPLETED"
-);
 
 verificationEventRepository.createEvent({
 
@@ -1678,18 +1438,6 @@ const evidenceGraph =
 
 });
 
-console.log(
-  "[DECISION] Creating verification decision",
-  {
-    verificationId,
-    email,
-    decision: decision.decision,
-    verificationStatus: verificationStatus.status,
-    confidenceScore: confidence.score,
-    confidenceLevel: confidence.level
-  }
-);
-
 createVerificationDecision({
 
     verificationId,
@@ -1775,55 +1523,149 @@ createVerificationDecision({
 
 });
 
+/*
+==================================================
+IMMUTABLE AUDIT TRAIL
+==================================================
 
-  verificationRepository.save({
-  verificationId,
+Append-only records of what evidence was observed
+and what the outcome of this attempt was. These do
+not participate in scoring or decisions; failures
+here must never break verification.
+==================================================
+*/
+
+recordEvidence({
 
   email,
 
   domain,
 
-  pattern:
+  source: "SMTP",
 
-    pattern ?? null,
+  outcome:
+    smtp.retryRequired
+      ? "TEMPORARY"
+      : smtp.mailboxExists
+        ? "SUCCESS"
+        : "FAILURE",
 
-  verificationStatus:
+  responseCode:
+    smtp.responseCode,
 
-    verificationStatus.status,
-
-  decision:
-
-    decision.decision,
-
-  confidenceScore:
-
-    confidence.score,
-
-  recommendation:
-
-    recommendation.recommendation,
+  responseMessage:
+    smtp.responseMessage,
 
   smtpValid:
-
     smtp.smtpValid,
 
   mailboxExists:
-
     smtp.mailboxExists,
 
   catchAll,
 
   retryRequired:
-
     smtp.retryRequired,
 
-  responseCode:
+  retryReason:
+    smtp.retryReason,
 
-    smtp.responseCode,
+  mxAvailable:
+    smtp.mxAvailable,
+
+  mxHosts:
+    smtp.mxHosts,
+
+  primaryMX:
+    smtp.primaryMX,
 
   provider:
+    smtp.provider,
 
-    smtp.provider
+  pattern,
+
+  verificationId,
+
+  requestId,
+
+  errorMessage:
+    smtp.error
+
+}).catch(error => {
+
+  console.error(
+    "[EvidenceLedger] Failed to append evidence:",
+    error
+  );
+
+});
+
+recordVerificationAttempt({
+
+  email,
+
+  domain,
+
+  method: "SMTP",
+
+  outcome:
+    verificationStatus.status === "TEMPORARY"
+      ? "TEMPORARY_FAILURE"
+      : verificationStatus.status === "NO_MX"
+        ? "DNS_ERROR"
+        : verificationStatus.status,
+
+  success:
+    verificationStatus.verificationPassed,
+
+  responseCode:
+    smtp.responseCode,
+
+  responseMessage:
+    smtp.responseMessage,
+
+  mailboxExists:
+    smtp.mailboxExists,
+
+  smtpValid:
+    smtp.smtpValid,
+
+  catchAll,
+
+  retryRequired:
+    smtp.retryRequired,
+
+  retryReason:
+    smtp.retryReason,
+
+  mxAvailable:
+    smtp.mxAvailable,
+
+  mxHosts:
+    smtp.mxHosts,
+
+  primaryMX:
+    smtp.primaryMX,
+
+  provider:
+    smtp.provider,
+
+  pattern,
+
+  verificationId,
+
+  requestId,
+
+  errorMessage:
+    smtp.error
+
+}).catch(error => {
+
+  console.error(
+    "[VerificationAttemptHistory] Failed to record attempt:",
+    error
+  );
+
 });
 
 verificationEventRepository.createEvent({
