@@ -1347,7 +1347,7 @@ export async function verifyRoute(
 
 
       const result =
-        verificationRepository.findByVerificationId(
+        await verificationRepository.findByVerificationId(
           verificationId
         );
 

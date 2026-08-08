@@ -130,6 +130,41 @@ REPOSITORY
 export class PatternHistoryRepository extends BaseRepository {
 
 
+  private mapHistoryRow(
+    row: PatternHistoryRow
+  ): PatternHistoryRow {
+
+    return {
+
+      ...row,
+
+      first_seen_at:
+        this.isoString(row.first_seen_at) ?? row.first_seen_at,
+
+      last_seen_at:
+        this.isoString(row.last_seen_at) ?? row.last_seen_at,
+
+    };
+
+  }
+
+
+  private mapObservationRow(
+    row: PatternObservationRow
+  ): PatternObservationRow {
+
+    return {
+
+      ...row,
+
+      observed_at:
+        this.isoString(row.observed_at) ?? row.observed_at,
+
+    };
+
+  }
+
+
   /*
   -----------------------------------------------
   HISTORY
@@ -137,13 +172,14 @@ export class PatternHistoryRepository extends BaseRepository {
   */
 
 
-  find(
+  async find(
     domain: string,
     pattern: string
-  ): PatternHistoryRow | null {
+  ): Promise<PatternHistoryRow | null> {
 
-    return this.queryOne<PatternHistoryRow>(
-      `
+    const row =
+      await this.queryOne<PatternHistoryRow>(
+        `
         SELECT
           domain,
           pattern,
@@ -154,22 +190,24 @@ export class PatternHistoryRepository extends BaseRepository {
           first_seen_at,
           last_seen_at
         FROM pattern_history
-        WHERE domain = ?
-        AND pattern = ?
+        WHERE domain = $1
+        AND pattern = $2
       `,
-      domain,
-      pattern
-    );
+        [domain, pattern]
+      );
+
+    return row ? this.mapHistoryRow(row) : null;
 
   }
 
 
-  findByDomain(
+  async findByDomain(
     domain: string
-  ): PatternHistoryRow[] {
+  ): Promise<PatternHistoryRow[]> {
 
-    return this.queryMany<PatternHistoryRow>(
-      `
+    const rows =
+      await this.queryMany<PatternHistoryRow>(
+        `
         SELECT
           domain,
           pattern,
@@ -180,19 +218,22 @@ export class PatternHistoryRepository extends BaseRepository {
           first_seen_at,
           last_seen_at
         FROM pattern_history
-        WHERE domain = ?
+        WHERE domain = $1
         ORDER BY confidence DESC, attempts DESC
       `,
-      domain
-    );
+        [domain]
+      );
+
+    return rows.map(row => this.mapHistoryRow(row));
 
   }
 
 
-  findAll(): PatternHistoryRow[] {
+  async findAll(): Promise<PatternHistoryRow[]> {
 
-    return this.queryMany<PatternHistoryRow>(
-      `
+    const rows =
+      await this.queryMany<PatternHistoryRow>(
+        `
         SELECT
           domain,
           pattern,
@@ -205,16 +246,18 @@ export class PatternHistoryRepository extends BaseRepository {
         FROM pattern_history
         ORDER BY domain ASC, confidence DESC
       `
-    );
+      );
+
+    return rows.map(row => this.mapHistoryRow(row));
 
   }
 
 
-  upsert(
+  async upsert(
     row: PatternHistoryRow
-  ): void {
+  ): Promise<void> {
 
-    this.executeUpdate(
+    await this.executeUpdate(
       `
         INSERT INTO pattern_history (
           domain,
@@ -226,7 +269,7 @@ export class PatternHistoryRepository extends BaseRepository {
           first_seen_at,
           last_seen_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 
         ON CONFLICT(
           domain,
@@ -236,60 +279,62 @@ export class PatternHistoryRepository extends BaseRepository {
         DO UPDATE SET
 
           attempts =
-            excluded.attempts,
+            EXCLUDED.attempts,
 
           successes =
-            excluded.successes,
+            EXCLUDED.successes,
 
           failures =
-            excluded.failures,
+            EXCLUDED.failures,
 
           confidence =
-            excluded.confidence,
+            EXCLUDED.confidence,
 
           last_seen_at =
-            excluded.last_seen_at
+            EXCLUDED.last_seen_at
       `,
-      row.domain,
-      row.pattern,
-      row.attempts,
-      row.successes,
-      row.failures,
-      row.confidence,
-      row.first_seen_at,
-      row.last_seen_at
+      [
+        row.domain,
+        row.pattern,
+        row.attempts,
+        row.successes,
+        row.failures,
+        row.confidence,
+        row.first_seen_at,
+        row.last_seen_at,
+      ]
     );
 
   }
 
 
-  delete(
+  async delete(
     domain: string,
     pattern: string
-  ): boolean {
+  ): Promise<boolean> {
 
-    return this.transaction(
-      () => {
+    return this.withTransaction(
+      async (tx) => {
 
-        this.executeDelete(
+        await this.executeDelete(
           `
             DELETE FROM pattern_observations
-            WHERE domain = ?
-            AND pattern = ?
+            WHERE domain = $1
+            AND pattern = $2
           `,
-          domain,
-          pattern
+          [domain, pattern],
+          tx
         );
 
         const changes =
-          this.executeDelete(
+          await this.executeDelete(
             `
               DELETE FROM pattern_history
-              WHERE domain = ?
-              AND pattern = ?
+              WHERE domain = $1
+              AND pattern = $2
             `,
-            domain,
-            pattern
+            [domain, pattern],
+            tx
           );
 
         return changes > 0;
@@ -300,27 +345,29 @@ export class PatternHistoryRepository extends BaseRepository {
   }
 
 
-  deleteDomain(
+  async deleteDomain(
     domain: string
-  ): number {
+  ): Promise<number> {
 
-    return this.transaction(
-      () => {
+    return this.withTransaction(
+      async (tx) => {
 
-        this.executeDelete(
+        await this.executeDelete(
           `
             DELETE FROM pattern_observations
-            WHERE domain = ?
+            WHERE domain = $1
           `,
-          domain
+          [domain],
+          tx
         );
 
         return this.executeDelete(
           `
             DELETE FROM pattern_history
-            WHERE domain = ?
+            WHERE domain = $1
           `,
-          domain
+          [domain],
+          tx
         );
 
       }
@@ -336,12 +383,13 @@ export class PatternHistoryRepository extends BaseRepository {
   */
 
 
-  insertObservation(
+  async insertObservation(
     observation: PatternObservationInsert
-  ): number {
+  ): Promise<number> {
 
-    return this.executeInsert(
-      `
+    const id =
+      await this.executeInsert(
+        `
         INSERT INTO pattern_observations (
           domain,
           pattern,
@@ -352,28 +400,34 @@ export class PatternHistoryRepository extends BaseRepository {
           observed_at,
           confidence_at_observation
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
       `,
-      observation.domain,
-      observation.pattern,
-      observation.outcome,
-      observation.source,
-      observation.responseCode,
-      observation.verificationId,
-      observation.observedAt ?? this.now(),
-      observation.confidenceAtObservation ?? 0
-    );
+        [
+          observation.domain,
+          observation.pattern,
+          observation.outcome,
+          observation.source,
+          observation.responseCode,
+          observation.verificationId,
+          observation.observedAt ?? this.now(),
+          observation.confidenceAtObservation ?? 0,
+        ]
+      );
+
+    return Number(id);
 
   }
 
 
-  findObservations(
+  async findObservations(
     domain: string,
     pattern: string
-  ): PatternObservationRow[] {
+  ): Promise<PatternObservationRow[]> {
 
-    return this.queryMany<PatternObservationRow>(
-      `
+    const rows =
+      await this.queryMany<PatternObservationRow>(
+        `
         SELECT
           id,
           domain,
@@ -385,13 +439,14 @@ export class PatternHistoryRepository extends BaseRepository {
           observed_at,
           confidence_at_observation
         FROM pattern_observations
-        WHERE domain = ?
-        AND pattern = ?
+        WHERE domain = $1
+        AND pattern = $2
         ORDER BY observed_at DESC
       `,
-      domain,
-      pattern
-    );
+        [domain, pattern]
+      );
+
+    return rows.map(row => this.mapObservationRow(row));
 
   }
 

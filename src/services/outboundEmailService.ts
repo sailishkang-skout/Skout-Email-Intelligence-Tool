@@ -61,7 +61,6 @@ transport invocation.
 
 import type {
   AuthoritativeVerificationRecord,
-  SendEligibilityResult,
 } from "./sendEligibility.js";
 
 import {
@@ -70,7 +69,6 @@ import {
 } from "./outboundSendGuard.js";
 
 import {
-  EmailSendProviderError,
   isEmailSendProviderError,
   type EmailSendProvider,
   type EmailSendRequest,
@@ -586,60 +584,6 @@ function invalidInputResult(
       null,
 
     verificationId,
-
-    serviceVersion:
-      OUTBOUND_EMAIL_SERVICE_VERSION,
-  };
-}
-
-/*
-==================================================
-BLOCKED RESULT
-==================================================
-*/
-
-function blockedResult(
-  email: string,
-  eligibility: SendEligibilityResult
-): OutboundEmailResult {
-
-  return {
-
-    success:
-      false,
-
-    email,
-
-    decision:
-      mapDecision(
-        eligibility.decision
-      ),
-
-    reasonCode:
-      mapReasonCode(
-        eligibility.reasonCode
-      ),
-
-    reason:
-      eligibility.reason,
-
-    confidence:
-      eligibility.decisionConfidence,
-
-    messageId:
-      null,
-
-    provider:
-      null,
-
-    error:
-      null,
-
-    policyVersion:
-      eligibility.policyVersion,
-
-    verificationId:
-      eligibility.verificationId,
 
     serviceVersion:
       OUTBOUND_EMAIL_SERVICE_VERSION,

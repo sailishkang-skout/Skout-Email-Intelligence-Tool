@@ -1,0 +1,104 @@
+name: email-intelligence-service
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-email_intel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-email_intel_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-email_intelligence}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-email_intel} -d ${POSTGRES_DB:-email_intelligence}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      DATABASE_URL: postgres://${POSTGRES_USER:-email_intel}:${POSTGRES_PASSWORD:-email_intel_dev_password}@postgres:5432/${POSTGRES_DB:-email_intelligence}
+      # The bundled postgres:16-alpine container doesn't have SSL
+      # configured. A real managed Postgres in production (RDS,
+      # Cloud SQL, etc.) should set DATABASE_SSL=true (or leave it
+      # unset, since it defaults to true whenever NODE_ENV=production).
+      DATABASE_SSL: "false"
+      REDIS_URL: redis://redis:6379
+      STORAGE_ENDPOINT: http://minio:9000
+      STORAGE_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-minioadmin}
+      STORAGE_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-email-intelligence-artifacts}
+      STORAGE_FORCE_PATH_STYLE: "true"
+    ports:
+      - "${PORT:-3001}:3001"
+    command: ["node", "dist/server.js"]
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgres://${POSTGRES_USER:-email_intel}:${POSTGRES_PASSWORD:-email_intel_dev_password}@postgres:5432/${POSTGRES_DB:-email_intelligence}
+      DATABASE_SSL: "false"
+      REDIS_URL: redis://redis:6379
+    command: ["node", "dist/worker.js"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

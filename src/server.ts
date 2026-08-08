@@ -1,35 +1,51 @@
-import app from "./app.js";
-import { closeDatabase } from "./database/database.js";
-import { startVerificationRetryScheduler } from "./services/verificationRetryScheduler.js";
+import "./observability/tracing.js";
 
-const PORT = Number(process.env.PORT ?? 3001);
-const HOST = process.env.HOST ?? "0.0.0.0";
+import { runMigrations } from "./database/migrations.js";
+import { getDatabase, closeDatabase } from "./database/database.js";
+import { closeRedis } from "./redis/redisClient.js";
+import { config } from "./config/config.js";
+import { shutdownTracing } from "./observability/tracing.js";
+import { ensureBucketExists } from "./storage/storageProvider.js";
 
-const RETRY_SCHEDULER_INTERVAL_MS = Number(
-	process.env.RETRY_SCHEDULER_INTERVAL_MS ?? 10_000
-);
+await runMigrations(getDatabase());
+
+try {
+	await ensureBucketExists();
+} catch (error) {
+	// Storage is used for large-artifact features that don't exist
+	// yet (see storageProvider.ts) — don't block API startup on it,
+	// but do surface the failure loudly since /readiness also checks
+	// it and operators should know why readiness might be degraded.
+	console.error("[Startup] Failed to ensure storage bucket exists:", error);
+}
+
+const { default: app } = await import("./app.js");
 
 try {
 	await app.listen({
-		port: PORT,
-		host: HOST,
+		port: config.server.port,
+		host: config.server.host,
 	});
 
 	app.log.info(
-		`Email intelligence service listening on ${HOST}:${PORT}`
+		`Email intelligence service listening on ${config.server.host}:${config.server.port}`
 	);
 } catch (error) {
 	app.log.error(error);
 	process.exit(1);
 }
 
-const retryScheduler = startVerificationRetryScheduler(
-	RETRY_SCHEDULER_INTERVAL_MS
-);
+/*
+==================================================
+GRACEFUL SHUTDOWN
+==================================================
 
-app.log.info(
-	`Verification retry scheduler started (interval: ${RETRY_SCHEDULER_INTERVAL_MS}ms)`
-);
+The API process no longer runs verification work
+inline (see src/worker.ts for that) — it only needs
+to release the HTTP server, database pool, and Redis
+connection cleanly.
+==================================================
+*/
 
 let shuttingDown = false;
 
@@ -42,8 +58,6 @@ async function shutdown(signal: string): Promise<void> {
 
 	app.log.info(`Received ${signal}, shutting down gracefully...`);
 
-	retryScheduler.stop();
-
 	try {
 		await app.close();
 	} catch (error) {
@@ -51,9 +65,21 @@ async function shutdown(signal: string): Promise<void> {
 	}
 
 	try {
-		closeDatabase();
+		await closeRedis();
+	} catch (error) {
+		app.log.error(error, "Error while closing Redis connection");
+	}
+
+	try {
+		await closeDatabase();
 	} catch (error) {
 		app.log.error(error, "Error while closing database connection");
+	}
+
+	try {
+		await shutdownTracing();
+	} catch (error) {
+		app.log.error(error, "Error while shutting down tracing");
 	}
 
 	process.exit(0);

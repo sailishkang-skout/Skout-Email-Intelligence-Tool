@@ -481,7 +481,7 @@ export default async function sendRoutes(
       }
 
       const persistedVerification =
-        verificationRepository.findByVerificationId(
+        await verificationRepository.findByVerificationId(
           verificationId
         );
 

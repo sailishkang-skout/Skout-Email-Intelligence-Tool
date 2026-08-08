@@ -9,13 +9,8 @@ import {
 } from "./confidenceEngine.js";
 
 import {
-  buildVerificationDecision,
-  type VerificationDecisionResult
+  buildVerificationDecision
 } from "./verificationDecisionEngine.js";
-
-import {
-  recordTimelineEvent
-} from "./evidenceTimeline.js";
 
 import {
   recordEvidence
@@ -34,30 +29,20 @@ import {
 } from "./patternIntelligence.js";
 
 import {
-  buildVerificationStatus,
-  type VerificationStatusResult
+  buildVerificationStatus
 } from "../types/verificationStatus.js";
 
 import {
-  analyzeVerificationEvidence,
-  type EvidenceSignal
+  analyzeVerificationEvidence
 } from "./evidenceAnalyzer.js";
 
 import {
   calculateEvidenceWeights
 } from "./evidenceWeighting.js";
 
-import type {
-  WeightedEvidence
-} from "./evidenceWeighting.js";
-
 import {
   collectVerificationEvidence
 } from "./evidenceCollector.js";
-
-import {
-  buildEvidenceGraph
-} from "./evidenceGraph.js";
 
 import {
   EvidenceRepository
@@ -85,6 +70,9 @@ const verificationRepository =
 
 const verificationEventRepository =
   new VerificationEventRepository();
+
+const evidenceRepository =
+  new EvidenceRepository();
 
 import {
  createVerificationDecision
@@ -633,7 +621,7 @@ const requestId =
 const verificationId =
   randomUUID();
 
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -688,7 +676,7 @@ verificationEventRepository.createEvent({
 
 
 
-  let smtpError:string|null = null;
+  let smtpError:string|null;
 
 
 
@@ -697,7 +685,7 @@ verificationEventRepository.createEvent({
   MX + SMTP VERIFICATION
   ==================================================
   */
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -743,7 +731,7 @@ verificationEventRepository.createEvent({
       mxHosts.length > 0;
 
 
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -761,30 +749,7 @@ verificationEventRepository.createEvent({
 
 });
 
-    await recordTimelineEvent({
-
-      verificationId,
-
-      stage:
-        "DNS",
-
-      event:
-        "MX_LOOKUP_COMPLETED",
-
-      data:{
-
-        domain,
-
-        mxHosts,
-
-        mxAvailable:
-          smtp.mxAvailable
-
-      }
-
-    });
-
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -801,7 +766,7 @@ verificationEventRepository.createEvent({
       const result =
   await verifySMTP(
     email,
-    smtp.primaryMX!
+    smtp.primaryMX
   );
 
       const normalized =
@@ -829,34 +794,9 @@ verificationEventRepository.createEvent({
 
 
 
-      await recordTimelineEvent({
-
-        verificationId,
-
-        stage:
-          "SMTP",
-
-        event:
-          "SMTP_VERIFICATION_COMPLETED",
-
-        data:{
-
-          mailboxExists:
-            smtp.mailboxExists,
-
-          smtpValid:
-            smtp.smtpValid,
-
-          responseCode:
-            smtp.responseCode
-
         }
 
-      });
-
-        }
-
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -893,7 +833,7 @@ verificationEventRepository.createEvent({
   smtp.error =
     smtpError;
 
-    verificationEventRepository.createEvent({
+    await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -912,22 +852,6 @@ verificationEventRepository.createEvent({
 
 });
 
-  await recordTimelineEvent({
-
-    verificationId,
-
-    stage:
-      "SMTP",
-
-    event:
-      "VERIFICATION_ERROR",
-
-    data:{
-      error:
-        smtpError
-    }
-
-  });
 }
 
 /*
@@ -936,7 +860,7 @@ CATCH ALL VERIFICATION
 ==================================================
 */
 
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -966,13 +890,13 @@ try {
   }
 
 }
-catch(error){
+catch{
 
   catchAll = false;
 
 }
 
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -992,7 +916,7 @@ verificationEventRepository.createEvent({
   CONFIDENCE ENGINE
   ==================================================
   */
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -1050,7 +974,7 @@ const collectedEvidence =
 });
 
 // Evidence collection completed
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -1075,7 +999,7 @@ ADVANCED PATTERN INTELLIGENCE SIGNALS
 ==================================================
 */
 const patternIntelligence =
-  getPatternIntelligence(
+  await getPatternIntelligence(
     domain
   );
 
@@ -1319,7 +1243,7 @@ const recommendation =
   });
 
 
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 
@@ -1336,26 +1260,6 @@ verificationEventRepository.createEvent({
   }
 
 });
-
-const evidenceGraph =
-  buildEvidenceGraph({
-
-    evidence:
-      evidenceWeights.evidence,
-
-    confidenceScore:
-      confidence.score,
-
-    confidenceLevel:
-      confidence.level,
-
-    decision:
-      decision.decision,
-
-    recommendation:
-      recommendation.action
-
-  });
 
   const verificationStatus =
   buildVerificationStatus({
@@ -1382,8 +1286,8 @@ const evidenceGraph =
 
   });
 
-  
-  verificationRepository.save({
+
+  await verificationRepository.save({
 
   verificationId,
 
@@ -1438,7 +1342,7 @@ const evidenceGraph =
 
 });
 
-createVerificationDecision({
+await createVerificationDecision({
 
     verificationId,
 
@@ -1522,6 +1426,55 @@ createVerificationDecision({
         "verification-engine-v1"
 
 });
+
+/*
+==================================================
+PERSIST PER-SIGNAL EVIDENCE
+==================================================
+
+Each analyzed signal (MX found, SMTP accepted/
+rejected, catch-all detected, etc.) is a discrete,
+traceable piece of evidence. verification_evidence
+is the durable record of what was actually observed
+— verification_events tracks stage progress, this
+tracks individual signals within those stages.
+
+Must run after verificationRepository.save() above:
+verification_evidence.verification_id has a foreign
+key to verification_results.verification_id.
+==================================================
+*/
+
+await Promise.all(
+  evidenceAnalysis.signals.map(signal =>
+    evidenceRepository.save({
+
+      verificationId,
+
+      evidenceType: signal.direction,
+
+      source: signal.source,
+
+      signal: signal.name,
+
+      value: signal.explanation,
+
+      confidenceScore: signal.confidence,
+
+      metadata: {
+        severity: signal.severity
+      }
+
+    }).catch(error => {
+
+      console.error(
+        "[EvidenceRepository] Failed to persist signal evidence:",
+        error
+      );
+
+    })
+  )
+);
 
 /*
 ==================================================
@@ -1668,7 +1621,7 @@ recordVerificationAttempt({
 
 });
 
-verificationEventRepository.createEvent({
+await verificationEventRepository.createEvent({
 
   verificationId,
 

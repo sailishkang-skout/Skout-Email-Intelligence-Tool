@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
-import {
-  appendFile,
-  mkdir,
-  readFile
-} from "node:fs/promises";
-import path from "node:path";
+
+import { getDatabase } from "../database/database.js";
 
 /*
 ==================================================
@@ -33,23 +29,13 @@ This service does NOT:
 - recommend sending
 - mutate pattern intelligence
 
-Storage:
-
-JSONL
-data/evidence-ledger.jsonl
-
-One observation per line.
+Storage: PostgreSQL (evidence_ledger table). Previously
+a local JSONL file — that doesn't survive container
+restarts and isn't visible across replicas, so it
+can't be the record of what evidence was actually
+observed in a horizontally-scaled deployment.
 ==================================================
 */
-
-const STORAGE_DIR = path.resolve(
-  process.env.EVIDENCE_LEDGER_DIR ?? "./data"
-);
-
-const STORAGE_FILE = path.join(
-  STORAGE_DIR,
-  "evidence-ledger.jsonl"
-);
 
 /*
 ==================================================
@@ -196,62 +182,6 @@ function extractDomain(
   );
 }
 
-function nullableBoolean(
-  value?: boolean | null
-): boolean | null {
-  return value === undefined
-    ? null
-    : value;
-}
-
-function nullableNumber(
-  value?: number | null
-): number | null {
-  if (
-    value === undefined ||
-    value === null
-  ) {
-    return null;
-  }
-
-  return Number.isFinite(value)
-    ? value
-    : null;
-}
-
-function nullableString(
-  value?: string | null
-): string | null {
-  if (
-    value === undefined ||
-    value === null
-  ) {
-    return null;
-  }
-
-  const normalized = value.trim();
-
-  return normalized || null;
-}
-
-function normalizeStringArray(
-  value?: string[]
-): string[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value
-    .filter(
-      (item): item is string =>
-        typeof item === "string"
-    )
-    .map(
-      item => item.trim()
-    )
-    .filter(Boolean);
-}
-
 /*
 ==================================================
 VALIDATION
@@ -308,156 +238,6 @@ function validateEvidenceInput(
 
 /*
 ==================================================
-RECORD BUILDER
-==================================================
-*/
-
-function buildRecord(
-  input: EvidenceLedgerInput
-): EvidenceLedgerRecord {
-  validateEvidenceInput(input);
-
-  const email =
-    normalizeEmail(input.email);
-
-  const domain =
-    normalizeDomain(input.domain) ??
-    extractDomain(email);
-
-  return {
-    id:
-      randomUUID(),
-
-    timestamp:
-      new Date().toISOString(),
-
-    version:
-      1,
-
-    email,
-
-    domain,
-
-    source:
-      input.source,
-
-    outcome:
-      input.outcome,
-
-    responseCode:
-      nullableNumber(
-        input.responseCode
-      ),
-
-    responseMessage:
-      nullableString(
-        input.responseMessage
-      ),
-
-    smtpValid:
-      nullableBoolean(
-        input.smtpValid
-      ),
-
-    mailboxExists:
-      nullableBoolean(
-        input.mailboxExists
-      ),
-
-    catchAll:
-      nullableBoolean(
-        input.catchAll
-      ),
-
-    retryRequired:
-      nullableBoolean(
-        input.retryRequired
-      ),
-
-    retryReason:
-      nullableString(
-        input.retryReason
-      ),
-
-    mxAvailable:
-      nullableBoolean(
-        input.mxAvailable
-      ),
-
-    mxHosts:
-      normalizeStringArray(
-        input.mxHosts
-      ),
-
-    primaryMX:
-      nullableString(
-        input.primaryMX
-      ),
-
-    provider:
-      nullableString(
-        input.provider
-      ),
-
-    pattern:
-      nullableString(
-        input.pattern
-      ),
-
-    patternEvidenceRecorded:
-      nullableBoolean(
-        input.patternEvidenceRecorded
-      ),
-
-    patternEvidenceOutcome:
-      input.patternEvidenceOutcome ??
-      null,
-
-    patternAttempts:
-      nullableNumber(
-        input.patternAttempts
-      ),
-
-    patternSuccesses:
-      nullableNumber(
-        input.patternSuccesses
-      ),
-
-    patternFailures:
-      nullableNumber(
-        input.patternFailures
-      ),
-
-    verificationId:
-      nullableString(
-        input.verificationId
-      ),
-
-    requestId:
-      nullableString(
-        input.requestId
-      ),
-
-    errorCode:
-      nullableString(
-        input.errorCode
-      ),
-
-    errorMessage:
-      nullableString(
-        input.errorMessage
-      ),
-
-    metadata:
-      input.metadata ?? {},
-
-    rawEvidence:
-      input.rawEvidence ?? null
-  };
-}
-
-/*
-==================================================
 APPEND
 ==================================================
 */
@@ -470,20 +250,85 @@ APPEND
 export async function appendEvidence(
   input: EvidenceLedgerInput
 ): Promise<EvidenceLedgerRecord> {
-  const record =
-    buildRecord(input);
 
-  await mkdir(
-    STORAGE_DIR,
-    {
-      recursive: true
-    }
-  );
+  validateEvidenceInput(input);
 
-  await appendFile(
-    STORAGE_FILE,
-    `${JSON.stringify(record)}\n`,
-    "utf8"
+  const email = normalizeEmail(input.email);
+  const domain = normalizeDomain(input.domain) ?? extractDomain(email);
+
+  const record: EvidenceLedgerRecord = {
+    id: randomUUID(),
+    timestamp: new Date().toISOString(),
+    version: 1,
+
+    email,
+    domain,
+
+    source: input.source,
+    outcome: input.outcome,
+
+    responseCode: input.responseCode ?? null,
+    responseMessage: input.responseMessage ?? null,
+    smtpValid: input.smtpValid ?? null,
+    mailboxExists: input.mailboxExists ?? null,
+    catchAll: input.catchAll ?? null,
+    retryRequired: input.retryRequired ?? null,
+    retryReason: input.retryReason ?? null,
+    mxAvailable: input.mxAvailable ?? null,
+    mxHosts: input.mxHosts ?? [],
+    primaryMX: input.primaryMX ?? null,
+    provider: input.provider ?? null,
+    pattern: input.pattern ?? null,
+    patternEvidenceRecorded: input.patternEvidenceRecorded ?? null,
+    patternEvidenceOutcome: input.patternEvidenceOutcome ?? null,
+    patternAttempts: input.patternAttempts ?? null,
+    patternSuccesses: input.patternSuccesses ?? null,
+    patternFailures: input.patternFailures ?? null,
+    verificationId: input.verificationId ?? null,
+    requestId: input.requestId ?? null,
+    errorCode: input.errorCode ?? null,
+    errorMessage: input.errorMessage ?? null,
+    metadata: input.metadata ?? {},
+    rawEvidence: input.rawEvidence ?? null,
+  };
+
+  const db = getDatabase();
+
+  await db.query(
+    `
+    INSERT INTO evidence_ledger (
+      id, email, domain, source, outcome,
+      response_code, response_message,
+      smtp_valid, mailbox_exists, catch_all, retry_required, retry_reason,
+      mx_available, mx_hosts, primary_mx, provider,
+      pattern, pattern_evidence_recorded, pattern_evidence_outcome,
+      pattern_attempts, pattern_successes, pattern_failures,
+      verification_id, request_id,
+      error_code, error_message,
+      metadata, raw_evidence, created_at
+    ) VALUES (
+      $1, $2, $3, $4, $5,
+      $6, $7,
+      $8, $9, $10, $11, $12,
+      $13, $14, $15, $16,
+      $17, $18, $19,
+      $20, $21, $22,
+      $23, $24,
+      $25, $26,
+      $27, $28, $29
+    )
+    `,
+    [
+      record.id, record.email, record.domain, record.source, record.outcome,
+      record.responseCode, record.responseMessage,
+      record.smtpValid, record.mailboxExists, record.catchAll, record.retryRequired, record.retryReason,
+      record.mxAvailable, JSON.stringify(record.mxHosts ?? []), record.primaryMX, record.provider,
+      record.pattern, record.patternEvidenceRecorded, record.patternEvidenceOutcome,
+      record.patternAttempts, record.patternSuccesses, record.patternFailures,
+      record.verificationId, record.requestId,
+      record.errorCode, record.errorMessage,
+      JSON.stringify(record.metadata ?? {}), record.rawEvidence ? JSON.stringify(record.rawEvidence) : null, record.timestamp,
+    ]
   );
 
   return record;
@@ -509,164 +354,150 @@ export async function recordEvidence(
 
 /*
 ==================================================
-READ ALL
+ROW MAPPING
 ==================================================
 */
 
-export async function readEvidenceLedger(): Promise<
-  EvidenceLedgerRecord[]
-> {
-  try {
-    const contents =
-      await readFile(
-        STORAGE_FILE,
-        "utf8"
-      );
+interface EvidenceLedgerRow {
+  id: string;
+  email: string;
+  domain: string | null;
+  source: EvidenceSource;
+  outcome: EvidenceOutcome;
+  response_code: number | null;
+  response_message: string | null;
+  smtp_valid: boolean | null;
+  mailbox_exists: boolean | null;
+  catch_all: boolean | null;
+  retry_required: boolean | null;
+  retry_reason: string | null;
+  mx_available: boolean | null;
+  mx_hosts: unknown;
+  primary_mx: string | null;
+  provider: string | null;
+  pattern: string | null;
+  pattern_evidence_recorded: boolean | null;
+  pattern_evidence_outcome: "SUCCESS" | "FAILURE" | "NOT_RECORDED" | null;
+  pattern_attempts: number | null;
+  pattern_successes: number | null;
+  pattern_failures: number | null;
+  verification_id: string | null;
+  request_id: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  metadata: unknown;
+  raw_evidence: unknown;
+  created_at: string | Date;
+}
 
-    const lines =
-      contents
-        .split("\n")
-        .map(
-          line => line.trim()
-        )
-        .filter(Boolean);
+function mapRow(row: EvidenceLedgerRow): EvidenceLedgerRecord {
+  return {
+    id: row.id,
+    timestamp:
+      row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : String(row.created_at),
+    version: 1,
 
-    const records: EvidenceLedgerRecord[] = [];
+    email: row.email,
+    domain: row.domain,
 
-    for (const line of lines) {
-      try {
-        const parsed =
-          JSON.parse(line);
+    source: row.source,
+    outcome: row.outcome,
 
-        if (
-          parsed &&
-          typeof parsed === "object"
-        ) {
-          records.push(
-            parsed as EvidenceLedgerRecord
-          );
-        }
-      } catch {
-        /*
-         * Ignore malformed historical lines.
-         *
-         * We don't want one corrupt audit record
-         * to make the entire ledger unreadable.
-         */
-      }
-    }
-
-    return records;
-  } catch (error) {
-    const code =
-      error &&
-      typeof error === "object" &&
-      "code" in error
-        ? error.code
-        : null;
-
-    if (code === "ENOENT") {
-      return [];
-    }
-
-    throw error;
-  }
+    responseCode: row.response_code,
+    responseMessage: row.response_message,
+    smtpValid: row.smtp_valid,
+    mailboxExists: row.mailbox_exists,
+    catchAll: row.catch_all,
+    retryRequired: row.retry_required,
+    retryReason: row.retry_reason,
+    mxAvailable: row.mx_available,
+    mxHosts: (row.mx_hosts as string[] | null) ?? [],
+    primaryMX: row.primary_mx,
+    provider: row.provider,
+    pattern: row.pattern,
+    patternEvidenceRecorded: row.pattern_evidence_recorded,
+    patternEvidenceOutcome: row.pattern_evidence_outcome,
+    patternAttempts: row.pattern_attempts,
+    patternSuccesses: row.pattern_successes,
+    patternFailures: row.pattern_failures,
+    verificationId: row.verification_id,
+    requestId: row.request_id,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? {},
+    rawEvidence: row.raw_evidence ?? null,
+  };
 }
 
 /*
 ==================================================
-QUERY BY EMAIL
+QUERIES
 ==================================================
 */
 
 export async function getEvidenceByEmail(
   email: string
 ): Promise<EvidenceLedgerRecord[]> {
-  const normalized =
-    normalizeEmail(email);
 
-  const records =
-    await readEvidenceLedger();
+  const db = getDatabase();
 
-  return records.filter(
-    record =>
-      normalizeEmail(
-        record.email
-      ) === normalized
+  const result = await db.query<EvidenceLedgerRow>(
+    `SELECT * FROM evidence_ledger WHERE email = $1 ORDER BY created_at ASC`,
+    [normalizeEmail(email)]
   );
-}
 
-/*
-==================================================
-QUERY BY VERIFICATION ID
-==================================================
-*/
+  return result.rows.map(mapRow);
+}
 
 export async function getEvidenceByVerificationId(
   verificationId: string
 ): Promise<EvidenceLedgerRecord[]> {
-  const normalized =
-    verificationId.trim();
+
+  const normalized = verificationId.trim();
 
   if (!normalized) {
     return [];
   }
 
-  const records =
-    await readEvidenceLedger();
+  const db = getDatabase();
 
-  return records.filter(
-    record =>
-      record.verificationId ===
-      normalized
+  const result = await db.query<EvidenceLedgerRow>(
+    `SELECT * FROM evidence_ledger WHERE verification_id = $1 ORDER BY created_at ASC`,
+    [normalized]
   );
-}
 
-/*
-==================================================
-QUERY BY DOMAIN
-==================================================
-*/
+  return result.rows.map(mapRow);
+}
 
 export async function getEvidenceByDomain(
   domain: string
 ): Promise<EvidenceLedgerRecord[]> {
-  const normalized =
-    normalizeDomain(domain);
+
+  const normalized = normalizeDomain(domain);
 
   if (!normalized) {
     return [];
   }
 
-  const records =
-    await readEvidenceLedger();
+  const db = getDatabase();
 
-  return records.filter(
-    record =>
-      record.domain ===
-      normalized
+  const result = await db.query<EvidenceLedgerRow>(
+    `SELECT * FROM evidence_ledger WHERE domain = $1 ORDER BY created_at ASC`,
+    [normalized]
   );
-}
 
-/*
-==================================================
-COUNT
-==================================================
-*/
+  return result.rows.map(mapRow);
+}
 
 export async function getEvidenceCount(): Promise<number> {
-  const records =
-    await readEvidenceLedger();
 
-  return records.length;
-}
+  const db = getDatabase();
 
-/*
-==================================================
-STORAGE INFO
-==================================================
-*/
+  const result = await db.query<{ count: string }>(
+    `SELECT COUNT(*) AS count FROM evidence_ledger`
+  );
 
-export function getEvidenceLedgerStoragePath(): string {
-  return STORAGE_FILE;
+  return Number(result.rows[0]?.count ?? 0);
 }

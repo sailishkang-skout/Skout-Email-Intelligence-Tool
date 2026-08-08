@@ -46,9 +46,9 @@ interface VerificationEventRow {
 
   status: VerificationEventStatus;
 
-  metadata: string | null;
+  metadata: unknown;
 
-  created_at: string;
+  created_at: string | Date;
 
 }
 
@@ -57,7 +57,7 @@ export class VerificationEventRepository
   extends BaseRepository {
 
 
-  createEvent(input: {
+  async createEvent(input: {
 
     verificationId: string;
 
@@ -67,7 +67,7 @@ export class VerificationEventRepository
 
     metadata?: Record<string, unknown>;
 
-  }): VerificationEventRecord {
+  }): Promise<VerificationEventRecord> {
 
     const id =
       randomUUID();
@@ -75,7 +75,7 @@ export class VerificationEventRepository
     const createdAt =
       new Date().toISOString();
 
-    this.executeRun(
+    await this.executeRun(
       `
       INSERT INTO verification_events
       (
@@ -83,24 +83,24 @@ export class VerificationEventRepository
         verification_id,
         stage,
         status,
-        metadata
+        metadata,
+        created_at
       )
       VALUES
       (
-        ?,
-        ?,
-        ?,
-        ?,
-        ?
+        $1, $2, $3, $4, $5, $6
       )
       `,
-      id,
-      input.verificationId,
-      input.stage,
-      input.status,
-      input.metadata
-        ? JSON.stringify(input.metadata)
-        : null
+      [
+        id,
+        input.verificationId,
+        input.stage,
+        input.status,
+        input.metadata
+          ? JSON.stringify(input.metadata)
+          : null,
+        createdAt,
+      ]
     );
 
     return {
@@ -126,79 +126,9 @@ export class VerificationEventRepository
   }
 
 
-  getByVerificationId(
-    verificationId: string
-  ): VerificationEventRecord[] {
-
-    const rows =
-      this.queryMany<VerificationEventRow>(
-        `
-        SELECT
-          id,
-          verification_id,
-          stage,
-          status,
-          metadata,
-          created_at
-        FROM verification_events
-        WHERE verification_id = ?
-        ORDER BY created_at ASC
-        `,
-        verificationId
-      );
-
-    return rows.map(row => ({
-
-      id:
-        row.id,
-
-      verificationId:
-        row.verification_id,
-
-      stage:
-        row.stage,
-
-      status:
-        row.status,
-
-      metadata:
-        row.metadata
-          ? JSON.parse(row.metadata) as Record<string, unknown>
-          : null,
-
-      createdAt:
-        row.created_at
-
-    }));
-
-  }
-
-
-  getLatestEvent(
-    verificationId: string
-  ): VerificationEventRecord | null {
-
-    const row =
-      this.queryOne<VerificationEventRow>(
-        `
-        SELECT
-          id,
-          verification_id,
-          stage,
-          status,
-          metadata,
-          created_at
-        FROM verification_events
-        WHERE verification_id = ?
-        ORDER BY created_at DESC
-        LIMIT 1
-        `,
-        verificationId
-      );
-
-    if (!row) {
-      return null;
-    }
+  private mapRow(
+    row: VerificationEventRow
+  ): VerificationEventRecord {
 
     return {
 
@@ -215,25 +145,23 @@ export class VerificationEventRepository
         row.status,
 
       metadata:
-        row.metadata
-          ? JSON.parse(row.metadata) as Record<string, unknown>
-          : null,
+        // JSONB columns are already parsed by pg.
+        (row.metadata as Record<string, unknown> | null) ?? null,
 
       createdAt:
-        row.created_at
+        this.isoString(row.created_at) ?? String(row.created_at)
 
     };
 
   }
 
 
-  getEventsByStage(
-    verificationId: string,
-    stage: VerificationStage
-  ): VerificationEventRecord[] {
+  async getByVerificationId(
+    verificationId: string
+  ): Promise<VerificationEventRecord[]> {
 
     const rows =
-      this.queryMany<VerificationEventRow>(
+      await this.queryMany<VerificationEventRow>(
         `
         SELECT
           id,
@@ -243,74 +171,100 @@ export class VerificationEventRepository
           metadata,
           created_at
         FROM verification_events
-        WHERE verification_id = ?
-        AND stage = ?
+        WHERE verification_id = $1
         ORDER BY created_at ASC
         `,
-        verificationId,
-        stage
+        [verificationId]
       );
 
-    return rows.map(row => ({
-
-      id:
-        row.id,
-
-      verificationId:
-        row.verification_id,
-
-      stage:
-        row.stage,
-
-      status:
-        row.status,
-
-      metadata:
-        row.metadata
-          ? JSON.parse(row.metadata) as Record<string, unknown>
-          : null,
-
-      createdAt:
-        row.created_at
-
-    }));
+    return rows.map(row => this.mapRow(row));
 
   }
 
 
-  countEvents(
+  async getLatestEvent(
     verificationId: string
-  ): number {
+  ): Promise<VerificationEventRecord | null> {
 
     const row =
-      this.queryOne<{
-        total: number;
-      }>(
+      await this.queryOne<VerificationEventRow>(
         `
         SELECT
-          COUNT(*) AS total
+          id,
+          verification_id,
+          stage,
+          status,
+          metadata,
+          created_at
         FROM verification_events
-        WHERE verification_id = ?
+        WHERE verification_id = $1
+        ORDER BY created_at DESC
+        LIMIT 1
         `,
-        verificationId
+        [verificationId]
       );
 
-    return row?.total ?? 0;
+    return row ? this.mapRow(row) : null;
 
   }
 
 
-  deleteByVerificationId(
-    verificationId: string
-  ): void {
+  async getEventsByStage(
+    verificationId: string,
+    stage: VerificationStage
+  ): Promise<VerificationEventRecord[]> {
 
-    this.executeRun(
+    const rows =
+      await this.queryMany<VerificationEventRow>(
+        `
+        SELECT
+          id,
+          verification_id,
+          stage,
+          status,
+          metadata,
+          created_at
+        FROM verification_events
+        WHERE verification_id = $1
+        AND stage = $2
+        ORDER BY created_at ASC
+        `,
+        [verificationId, stage]
+      );
+
+    return rows.map(row => this.mapRow(row));
+
+  }
+
+
+  async countEvents(
+    verificationId: string
+  ): Promise<number> {
+
+    return this.count(
+      `
+      SELECT
+        COUNT(*) AS total
+      FROM verification_events
+      WHERE verification_id = $1
+      `,
+      [verificationId]
+    );
+
+  }
+
+
+  async deleteByVerificationId(
+    verificationId: string
+  ): Promise<void> {
+
+    await this.executeRun(
       `
       DELETE
       FROM verification_events
-      WHERE verification_id = ?
+      WHERE verification_id = $1
       `,
-      verificationId
+      [verificationId]
     );
 
   }

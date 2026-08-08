@@ -590,17 +590,17 @@ current API response reflects the new observation.
 ==================================================
 */
 
-function refreshCandidateAfterVerification(
+async function refreshCandidateAfterVerification(
   domain: string,
   generatedCandidates:
     Parameters<
       typeof rankEmailCandidates
     >[1],
   verifiedEmail: string
-): RankedEmailCandidate | null {
+): Promise<RankedEmailCandidate | null> {
 
   const refreshedRanking =
-    rankEmailCandidates(
+    await rankEmailCandidates(
       domain,
       generatedCandidates
     );
@@ -919,7 +919,7 @@ export async function discoverEmail(
   */
 
   let ranking =
-    rankEmailCandidates(
+    await rankEmailCandidates(
       domain,
       generated
     );
@@ -997,7 +997,7 @@ export async function discoverEmail(
       */
 
       const refreshedCandidate =
-        refreshCandidateAfterVerification(
+        await refreshCandidateAfterVerification(
           domain,
           generated,
           candidate.email
@@ -1066,7 +1066,7 @@ export async function discoverEmail(
   */
 
   ranking =
-    rankEmailCandidates(
+    await rankEmailCandidates(
       domain,
       generated
     );

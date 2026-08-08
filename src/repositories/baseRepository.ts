@@ -1,23 +1,30 @@
 import { randomUUID } from "node:crypto";
 
+import type { Pool, PoolClient, QueryResultRow } from "pg";
+
 import {
   getDatabase,
   type DatabaseConnection
 } from "../database/database.js";
 
-import {
-  withTransaction
-} from "../database/transaction.js";
 
-import type {
-  Statement,
-  RunResult
-} from "better-sqlite3";
+/**
+ * ==================================================
+ * QUERY EXECUTOR
+ * ==================================================
+ *
+ * Either the pool itself (auto-managed connection per
+ * query) or a checked-out client inside a transaction.
+ * Both expose the same `.query()` shape, so the query
+ * helper methods below don't need to know which one
+ * they're using.
+ */
+type QueryExecutor = Pool | PoolClient;
 
 
 /**
  * ==================================================
- * BASE REPOSITORY (ENTERPRISE v2)
+ * BASE REPOSITORY
  * ==================================================
  *
  * Purpose
@@ -26,15 +33,11 @@ import type {
  *
  * Responsibilities
  * ----------------
- * - shared database connection
+ * - shared PostgreSQL connection pool
  * - transaction handling
- * - prepared statement caching
  * - typed query helpers
  * - generic CRUD helpers
- * - timestamp helpers
- * - UUID helper
- * - normalization utilities
- * - SQLite boolean conversion helpers
+ * - timestamp/UUID helpers
  *
  * This class intentionally contains NO business logic.
  *
@@ -43,90 +46,58 @@ import type {
 
 export abstract class BaseRepository {
 
-  /**
-   * ==================================================
-   * DATABASE CONNECTION
-   * ==================================================
-   */
-
   protected readonly db: DatabaseConnection =
     getDatabase();
 
 
   /**
    * ==================================================
-   * STATEMENT CACHE
-   * ==================================================
-   */
-
-  private readonly statementCache =
-    new Map<string, Statement>();
-
-
-  /**
-   * ==================================================
    * TRANSACTION
    * ==================================================
+   *
+   * Runs `callback` against a single checked-out client
+   * inside a BEGIN/COMMIT block. Pass `tx` (not `this`)
+   * to any query helper calls made inside the callback,
+   * so they run on the same connection/transaction
+   * rather than a different pooled connection.
+   *
+   * Example:
+   *
+   *     return this.withTransaction(async (tx) => {
+   *       await this.executeDelete(sql, [x], tx);
+   *       return this.executeDelete(sql2, [x], tx);
+   *     });
    */
 
-  protected transaction<T>(
-    callback: () => T
-  ): T {
+  protected async withTransaction<T>(
+    callback: (tx: PoolClient) => Promise<T>
+  ): Promise<T> {
 
-    return withTransaction(
-      callback
-    );
+    const client =
+      await this.db.connect();
 
-  }
+    try {
 
+      await client.query("BEGIN");
 
-  /**
-   * ==================================================
-   * PREPARE STATEMENT (CACHED)
-   * ==================================================
-   */
+      const result =
+        await callback(client);
 
-  protected prepare(
-    sql: string
-  ): Statement {
+      await client.query("COMMIT");
 
-    const cached =
-      this.statementCache.get(
-        sql
-      );
+      return result;
 
-    if (cached) {
-      return cached;
+    } catch (error) {
+
+      await client.query("ROLLBACK");
+
+      throw error;
+
+    } finally {
+
+      client.release();
+
     }
-
-    const statement =
-      this.db.prepare(
-        sql
-      );
-
-    this.statementCache.set(
-      sql,
-      statement
-    );
-
-    return statement;
-
-  }
-
-
-  /**
-   * ==================================================
-   * EXECUTE RAW SQL
-   * ==================================================
-   */
-
-  protected exec(
-    sql: string
-  ): void {
-
-    this.db.exec(
-      sql
-    );
 
   }
 
@@ -137,17 +108,16 @@ export abstract class BaseRepository {
    * ==================================================
    */
 
-  protected queryOne<T>(
+  protected async queryOne<T extends QueryResultRow>(
     sql: string,
-    ...params: unknown[]
-  ): T | null {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<T | null> {
 
-    const row =
-      this.prepare(sql).get(
-        ...params
-      ) as T | undefined;
+    const result =
+      await executor.query<T>(sql, params);
 
-    return row ?? null;
+    return result.rows[0] ?? null;
 
   }
 
@@ -158,32 +128,39 @@ export abstract class BaseRepository {
    * ==================================================
    */
 
-  protected queryMany<T>(
+  protected async queryMany<T extends QueryResultRow>(
     sql: string,
-    ...params: unknown[]
-  ): T[] {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<T[]> {
 
-    return this.prepare(sql).all(
-      ...params
-    ) as T[];
+    const result =
+      await executor.query<T>(sql, params);
+
+    return result.rows;
 
   }
 
 
   /**
    * ==================================================
-   * RUN STATEMENT
+   * RUN STATEMENT (INSERT/UPDATE/DELETE without a
+   * meaningful return value)
    * ==================================================
    */
 
-  protected executeRun(
+  protected async executeRun(
     sql: string,
-    ...params: unknown[]
-  ): RunResult {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<{ rowCount: number }> {
 
-    return this.prepare(sql).run(
-      ...params
-    );
+    const result =
+      await executor.query(sql, params);
+
+    return {
+      rowCount: result.rowCount ?? 0
+    };
 
   }
 
@@ -194,24 +171,23 @@ export abstract class BaseRepository {
    * ==================================================
    */
 
-  protected exists(
+  protected async exists(
     sql: string,
-    ...params: unknown[]
-  ): boolean {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<boolean> {
 
-    const row =
-      this.prepare(sql).get(
-        ...params
-      ) as
-        | Record<string, unknown>
-        | undefined;
+    const result =
+      await executor.query(sql, params);
 
-    if (!row) {
+    if (result.rows.length === 0) {
       return false;
     }
 
     const value =
-      Object.values(row)[0];
+      Object.values(
+        result.rows[0] as Record<string, unknown>
+      )[0];
 
     if (typeof value === "number") {
       return value > 0;
@@ -228,24 +204,21 @@ export abstract class BaseRepository {
    * ==================================================
    */
 
-  protected scalar<T>(
+  protected async scalar<T>(
     sql: string,
-    ...params: unknown[]
-  ): T | null {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<T | null> {
 
-    const row =
-      this.prepare(sql).get(
-        ...params
-      ) as
-        | Record<string, unknown>
-        | undefined;
+    const result =
+      await executor.query(sql, params);
 
-    if (!row) {
+    if (result.rows.length === 0) {
       return null;
     }
 
     const values =
-      Object.values(row);
+      Object.values(result.rows[0] as Record<string, unknown>);
 
     if (values.length === 0) {
       return null;
@@ -262,15 +235,16 @@ export abstract class BaseRepository {
    * ==================================================
    */
 
-  protected count(
+  protected async count(
     sql: string,
-    ...params: unknown[]
-  ): number {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<number> {
 
-    return this.scalar<number>(
-      sql,
-      ...params
-    ) ?? 0;
+    const value =
+      await this.scalar<number | string>(sql, params, executor);
+
+    return Number(value ?? 0);
 
   }
 
@@ -279,22 +253,37 @@ export abstract class BaseRepository {
    * ==================================================
    * INSERT HELPER
    * ==================================================
+   *
+   * Returns the inserted row's `id` when the statement
+   * includes `RETURNING id`; otherwise returns null.
    */
 
-  protected executeInsert(
+  protected async executeInsert(
     sql: string,
-    ...params: unknown[]
-  ): number {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<string | number | null> {
 
     const result =
-      this.executeRun(
-        sql,
-        ...params
-      );
+      await executor.query(sql, params);
 
-    return Number(
-      result.lastInsertRowid
-    );
+    const row =
+      result.rows[0] as
+        | Record<string, unknown>
+        | undefined;
+
+    if (!row) {
+      return null;
+    }
+
+    const value = row.id;
+
+    return (
+      typeof value === "string" ||
+      typeof value === "number"
+    )
+      ? value
+      : null;
 
   }
 
@@ -305,18 +294,16 @@ export abstract class BaseRepository {
    * ==================================================
    */
 
-  protected executeUpdate(
+  protected async executeUpdate(
     sql: string,
-    ...params: unknown[]
-  ): number {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<number> {
 
-    const result =
-      this.executeRun(
-        sql,
-        ...params
-      );
+    const { rowCount } =
+      await this.executeRun(sql, params, executor);
 
-    return result.changes;
+    return rowCount;
 
   }
 
@@ -327,18 +314,16 @@ export abstract class BaseRepository {
    * ==================================================
    */
 
-  protected executeDelete(
+  protected async executeDelete(
     sql: string,
-    ...params: unknown[]
-  ): number {
+    params: unknown[] = [],
+    executor: QueryExecutor = this.db
+  ): Promise<number> {
 
-    const result =
-      this.executeRun(
-        sql,
-        ...params
-      );
+    const { rowCount } =
+      await this.executeRun(sql, params, executor);
 
-    return result.changes;
+    return rowCount;
 
   }
 
@@ -371,37 +356,26 @@ export abstract class BaseRepository {
 
   /**
    * ==================================================
-   * UNIX TIME
+   * BOOLEAN HELPERS
    * ==================================================
-   */
-
-  protected unixTime(): number {
-
-    return Math.floor(
-      Date.now() / 1000
-    );
-
-  }
-
-
-  /**
-   * ==================================================
-   * SQLITE BOOLEAN HELPERS
-   * ==================================================
+   *
+   * PostgreSQL has a native boolean type, so — unlike
+   * the previous SQLite integer-flag encoding — these
+   * are now near-passthroughs. Kept for a stable,
+   * explicit call-site API and as a defensive coercion
+   * boundary for any legacy 0/1 values still present in
+   * data written before this migration.
    */
 
   protected sqliteBool(
     value: boolean | null | undefined
-  ): number | null {
+  ): boolean | null {
 
-    if (
-      value === null ||
-      value === undefined
-    ) {
+    if (value === null || value === undefined) {
       return null;
     }
 
-    return value ? 1 : 0;
+    return Boolean(value);
 
   }
 
@@ -412,7 +386,8 @@ export abstract class BaseRepository {
 
     return value === 1 ||
       value === true ||
-      value === "1";
+      value === "1" ||
+      value === "true";
 
   }
 
@@ -421,14 +396,44 @@ export abstract class BaseRepository {
     value: unknown
   ): boolean | null {
 
-    if (
-      value === null ||
-      value === undefined
-    ) {
+    if (value === null || value === undefined) {
       return null;
     }
 
     return this.bool(value);
+
+  }
+
+
+  /**
+   * ==================================================
+   * DATE NORMALIZATION
+   * ==================================================
+   *
+   * pg returns TIMESTAMPTZ columns as JS Date objects.
+   * Existing interfaces throughout the codebase type
+   * these fields as ISO strings; normalize here so
+   * every repository returns the same shape it always
+   * has, rather than leaking driver-specific types.
+   */
+
+  protected isoString(
+    value: unknown
+  ): string | null {
+
+    if (value === null || value === undefined) {
+      return null;
+    }
+
+    if (value instanceof Date) {
+      return value.toISOString();
+    }
+
+    // Anything reaching here is a primitive TEXT/VARCHAR column
+    // value from pg, not an object — String() is the intended
+    // conversion, not an accidental "[object Object]".
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string
+    return String(value);
 
   }
 
@@ -545,19 +550,6 @@ export abstract class BaseRepository {
       limit:safePageSize,
       offset:(safePage - 1) * safePageSize
     };
-
-  }
-
-
-  /**
-   * ==================================================
-   * CLEAR STATEMENT CACHE
-   * ==================================================
-   */
-
-  protected clearStatementCache(): void {
-
-    this.statementCache.clear();
 
   }
 

@@ -341,15 +341,15 @@ PATTERN INTELLIGENCE SCORE
 ==================================================
 */
 
-function getIntelligenceScore(
+async function getIntelligenceScore(
   domain: string,
   pattern: string
-): number | null {
+): Promise<number | null> {
 
   try {
 
     const intelligence =
-      getPatternIntelligence(
+      await getPatternIntelligence(
         domain
       );
 
@@ -540,10 +540,10 @@ RANK ONE CANDIDATE
 ==================================================
 */
 
-function rankCandidate(
+async function rankCandidate(
   domain: string,
   candidate: EmailPermutationCandidate
-): RankedEmailCandidate {
+): Promise<RankedEmailCandidate> {
 
   const pattern =
     normalizePattern(
@@ -562,7 +562,7 @@ function rankCandidate(
   */
 
   const history =
-    getPatternHistory(
+    await getPatternHistory(
       domain,
       pattern
     );
@@ -622,7 +622,7 @@ function rankCandidate(
   */
 
   const intelligenceScore =
-    getIntelligenceScore(
+    await getIntelligenceScore(
       domain,
       pattern
     );
@@ -725,10 +725,10 @@ PUBLIC
 ==================================================
 */
 
-export function rankEmailCandidates(
+export async function rankEmailCandidates(
   domain: string,
   candidates: EmailPermutationCandidate[]
-): RankedEmailResult {
+): Promise<RankedEmailResult> {
 
   const normalizedDomain =
     normalizeDomain(
@@ -746,26 +746,28 @@ export function rankEmailCandidates(
   }
 
   const ranked =
-    candidates
-      .filter(
-        (
-          candidate
-        ) =>
-          Boolean(
-            candidate &&
-            typeof candidate.email === "string" &&
-            typeof candidate.pattern === "string"
-          )
-      )
-      .map(
-        (
-          candidate
-        ) =>
-          rankCandidate(
-            normalizedDomain,
+    await Promise.all(
+      candidates
+        .filter(
+          (
             candidate
-          )
-      );
+          ) =>
+            Boolean(
+              candidate &&
+              typeof candidate.email === "string" &&
+              typeof candidate.pattern === "string"
+            )
+        )
+        .map(
+          (
+            candidate
+          ) =>
+            rankCandidate(
+              normalizedDomain,
+              candidate
+            )
+        )
+    );
 
   /*
   ------------------------------------------------
@@ -877,10 +879,10 @@ ALIAS
 ==================================================
 */
 
-export function rankPatterns(
+export async function rankPatterns(
   domain: string,
   candidates: EmailPermutationCandidate[]
-): RankedEmailResult {
+): Promise<RankedEmailResult> {
 
   return rankEmailCandidates(
     domain,

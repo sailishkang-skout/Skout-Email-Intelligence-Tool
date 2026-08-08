@@ -1,12 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  appendFile,
-  mkdir,
-  readFile
-} from "node:fs/promises";
-
-import path from "node:path";
+import { getDatabase } from "../database/database.js";
 
 
 /*
@@ -26,28 +20,12 @@ It does NOT:
 
 Those responsibilities belong elsewhere.
 
+Storage: PostgreSQL (verification_attempt_history
+table). Previously a local JSONL file — see
+evidenceLedger.ts for why that doesn't work in a
+horizontally-scaled, containerized deployment.
 ==================================================
 */
-
-
-/*
-==================================================
-STORAGE
-==================================================
-*/
-
-const DEFAULT_STORAGE_DIR =
-  path.resolve(
-    process.env.VERIFICATION_ATTEMPT_HISTORY_DIR ??
-      "./data"
-  );
-
-
-const DEFAULT_STORAGE_FILE =
-  path.join(
-    DEFAULT_STORAGE_DIR,
-    "verification-attempt-history.jsonl"
-  );
 
 
 /*
@@ -259,110 +237,6 @@ function extractDomain(
 
 /*
 ==================================================
-SAFE HELPERS
-==================================================
-*/
-
-
-function nullableBoolean(
-  value?:boolean|null
-):boolean|null {
-
-
-  if(
-    value === undefined ||
-    value === null
-  ){
-
-    return null;
-
-  }
-
-
-  return Boolean(value);
-
-}
-
-
-
-function nullableNumber(
-  value?:number|null
-):number|null {
-
-
-  if(
-    value === undefined ||
-    value === null
-  ){
-
-    return null;
-
-  }
-
-
-  return Number.isFinite(value)
-    ? value
-    : null;
-
-}
-
-
-
-function nullableString(
-  value?:string|null
-):string|null {
-
-
-  if(
-    value === undefined ||
-    value === null
-  ){
-
-    return null;
-
-  }
-
-
-  const clean =
-    value.trim();
-
-
-  return clean || null;
-
-}
-
-
-
-function normalizeStringArray(
-  value?:string[]
-):string[] {
-
-
-  if(
-    !Array.isArray(value)
-  ){
-
-    return [];
-
-  }
-
-
-  return value
-    .filter(
-      (
-        item
-      ):item is string =>
-        typeof item === "string"
-    )
-    .map(
-      item =>
-        item.trim()
-    )
-    .filter(Boolean);
-
-}
- /*
-==================================================
 CREATE RECORD
 ==================================================
 */
@@ -422,111 +296,75 @@ function createRecord(
 
 
     responseCode:
-      nullableNumber(
-        input.responseCode
-      ),
+      input.responseCode ?? null,
 
 
     responseMessage:
-      nullableString(
-        input.responseMessage
-      ),
+      input.responseMessage ?? null,
 
 
     mailboxExists:
-      nullableBoolean(
-        input.mailboxExists
-      ),
+      input.mailboxExists ?? null,
 
 
     smtpValid:
-      nullableBoolean(
-        input.smtpValid
-      ),
+      input.smtpValid ?? null,
 
 
     catchAll:
-      nullableBoolean(
-        input.catchAll
-      ),
+      input.catchAll ?? null,
 
 
     retryRequired:
-      nullableBoolean(
-        input.retryRequired
-      ),
+      input.retryRequired ?? null,
 
 
     retryReason:
-      nullableString(
-        input.retryReason
-      ),
+      input.retryReason ?? null,
 
 
     mxAvailable:
-      nullableBoolean(
-        input.mxAvailable
-      ),
+      input.mxAvailable ?? null,
 
 
     mxHosts:
-      normalizeStringArray(
-        input.mxHosts
-      ),
+      Array.isArray(input.mxHosts) ? input.mxHosts : [],
 
 
     primaryMX:
-      nullableString(
-        input.primaryMX
-      ),
+      input.primaryMX ?? null,
 
 
     provider:
-      nullableString(
-        input.provider
-      ),
+      input.provider ?? null,
 
 
     pattern:
-      nullableString(
-        input.pattern
-      ),
+      input.pattern ?? null,
 
 
     verificationId:
-      nullableString(
-        input.verificationId
-      ),
+      input.verificationId ?? null,
 
 
     requestId:
-      nullableString(
-        input.requestId
-      ),
+      input.requestId ?? null,
 
 
     cacheHit:
-      nullableBoolean(
-        input.cacheHit
-      ),
+      input.cacheHit ?? null,
 
 
     cacheAgeMs:
-      nullableNumber(
-        input.cacheAgeMs
-      ),
+      input.cacheAgeMs ?? null,
 
 
     errorCode:
-      nullableString(
-        input.errorCode
-      ),
+      input.errorCode ?? null,
 
 
     errorMessage:
-      nullableString(
-        input.errorMessage
-      ),
+      input.errorMessage ?? null,
 
 
     metadata:
@@ -534,36 +372,6 @@ function createRecord(
       {}
 
   };
-
-}
-
-
-
-/*
-==================================================
-WRITE RECORD
-==================================================
-*/
-
-
-async function writeRecord(
-  record:VerificationAttemptRecord
-):Promise<void>{
-
-
-  await mkdir(
-    DEFAULT_STORAGE_DIR,
-    {
-      recursive:true
-    }
-  );
-
-
-  await appendFile(
-    DEFAULT_STORAGE_FILE,
-    `${JSON.stringify(record)}\n`,
-    "utf8"
-  );
 
 }
 
@@ -587,10 +395,41 @@ export async function recordVerificationAttempt(
     );
 
 
-  await writeRecord(
-    record
-  );
+  const db = getDatabase();
 
+  await db.query(
+    `
+    INSERT INTO verification_attempt_history (
+      id, email, domain, method, outcome, success,
+      response_code, response_message,
+      mailbox_exists, smtp_valid, catch_all, retry_required, retry_reason,
+      mx_available, mx_hosts, primary_mx, provider, pattern,
+      verification_id, request_id,
+      cache_hit, cache_age_ms,
+      error_code, error_message,
+      metadata, created_at
+    ) VALUES (
+      $1, $2, $3, $4, $5, $6,
+      $7, $8,
+      $9, $10, $11, $12, $13,
+      $14, $15, $16, $17, $18,
+      $19, $20,
+      $21, $22,
+      $23, $24,
+      $25, $26
+    )
+    `,
+    [
+      record.id, record.email, record.domain, record.method, record.outcome, record.success,
+      record.responseCode, record.responseMessage,
+      record.mailboxExists, record.smtpValid, record.catchAll, record.retryRequired, record.retryReason,
+      record.mxAvailable, JSON.stringify(record.mxHosts ?? []), record.primaryMX, record.provider, record.pattern,
+      record.verificationId, record.requestId,
+      record.cacheHit, record.cacheAgeMs,
+      record.errorCode, record.errorMessage,
+      JSON.stringify(record.metadata ?? {}), record.timestamp,
+    ]
+  );
 
   return record;
 
@@ -600,144 +439,75 @@ export async function recordVerificationAttempt(
 
 /*
 ==================================================
-READ ALL RECORDS
+ROW MAPPING
 ==================================================
 */
 
-
-async function readAllRecords()
-:Promise<VerificationAttemptRecord[]>{
-
-
-  try {
-
-
-    const content =
-      await readFile(
-        DEFAULT_STORAGE_FILE,
-        "utf8"
-      );
-
-
-    if(
-      !content.trim()
-    ){
-
-      return [];
-
-    }
-
-
-
-    const records:
-      VerificationAttemptRecord[] =
-      [];
-
-
-
-    for(
-      const line of content.split("\n")
-    ){
-
-
-      if(
-        !line.trim()
-      ){
-
-        continue;
-
-      }
-
-
-
-      try {
-
-
-        const parsed =
-          JSON.parse(
-            line
-          );
-
-
-
-        if(
-          parsed &&
-          typeof parsed === "object" &&
-          typeof parsed.id === "string" &&
-          typeof parsed.email === "string"
-        ){
-
-          records.push(
-            parsed as VerificationAttemptRecord
-          );
-
-        }
-
-
-      }catch{
-
-
-        /*
-        Ignore corrupted lines.
-        Historical data should not crash service.
-        */
-
-
-        continue;
-
-      }
-
-    }
-
-
-
-    return records;
-
-
-
-  }catch(error:unknown){
-
-
-    const code =
-      typeof error === "object" &&
-      error !== null &&
-      "code" in error
-        ? error.code
-        : null;
-
-
-
-    if(
-      code === "ENOENT"
-    ){
-
-      return [];
-
-    }
-
-
-
-    throw error;
-
-  }
-
+interface AttemptHistoryRow {
+  id: string;
+  email: string;
+  domain: string | null;
+  method: VerificationAttemptMethod;
+  outcome: VerificationAttemptOutcome;
+  success: boolean;
+  response_code: number | null;
+  response_message: string | null;
+  mailbox_exists: boolean | null;
+  smtp_valid: boolean | null;
+  catch_all: boolean | null;
+  retry_required: boolean | null;
+  retry_reason: string | null;
+  mx_available: boolean | null;
+  mx_hosts: unknown;
+  primary_mx: string | null;
+  provider: string | null;
+  pattern: string | null;
+  verification_id: string | null;
+  request_id: string | null;
+  cache_hit: boolean | null;
+  cache_age_ms: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  metadata: unknown;
+  created_at: string | Date;
 }
 
+function mapRow(row: AttemptHistoryRow): VerificationAttemptRecord {
+  return {
+    id: row.id,
+    timestamp:
+      row.created_at instanceof Date
+        ? row.created_at.toISOString()
+        : String(row.created_at),
+    version: 1,
 
+    email: row.email,
+    domain: row.domain,
 
-/*
-==================================================
-GET ALL
-==================================================
-*/
+    method: row.method,
+    outcome: row.outcome,
+    success: row.success,
 
-
-export async function getVerificationAttempts()
-:Promise<VerificationAttemptRecord[]>{
-
-
-  return readAllRecords();
-
+    responseCode: row.response_code,
+    responseMessage: row.response_message,
+    mailboxExists: row.mailbox_exists,
+    smtpValid: row.smtp_valid,
+    catchAll: row.catch_all,
+    retryRequired: row.retry_required,
+    retryReason: row.retry_reason,
+    mxAvailable: row.mx_available,
+    mxHosts: (row.mx_hosts as string[] | null) ?? [],
+    primaryMX: row.primary_mx,
+    provider: row.provider,
+    pattern: row.pattern,
+    verificationId: row.verification_id,
+    requestId: row.request_id,
+    cacheHit: row.cache_hit,
+    cacheAgeMs: row.cache_age_ms,
+    errorCode: row.error_code,
+    errorMessage: row.error_message,
+    metadata: (row.metadata as Record<string, unknown> | null) ?? {},
+  };
 }
 
 
@@ -753,37 +523,18 @@ export async function getVerificationAttemptsByEmail(
   email:string
 ):Promise<VerificationAttemptRecord[]>{
 
+  const db = getDatabase();
 
-  const normalized =
-    normalizeEmail(
-      email
-    );
+  const result = await db.query<AttemptHistoryRow>(
+    `
+    SELECT * FROM verification_attempt_history
+    WHERE email = $1
+    ORDER BY created_at DESC
+    `,
+    [normalizeEmail(email)]
+  );
 
-
-
-  const records =
-    await readAllRecords();
-
-
-
-  return records
-    .filter(
-      record =>
-        record.email === normalized
-    )
-    .sort(
-      (
-        a,
-        b
-      ) =>
-        new Date(
-          b.timestamp
-        ).getTime()
-        -
-        new Date(
-          a.timestamp
-        ).getTime()
-    );
+  return result.rows.map(mapRow);
 
 }
 
@@ -800,37 +551,22 @@ export async function getVerificationAttemptsByVerificationId(
   verificationId:string
 ):Promise<VerificationAttemptRecord[]>{
 
+  const db = getDatabase();
 
-  const id =
-    verificationId.trim();
+  const result = await db.query<AttemptHistoryRow>(
+    `
+    SELECT * FROM verification_attempt_history
+    WHERE verification_id = $1
+    ORDER BY created_at DESC
+    `,
+    [verificationId.trim()]
+  );
 
-
-
-  const records =
-    await readAllRecords();
-
-
-
-  return records
-    .filter(
-      record =>
-        record.verificationId === id
-    )
-    .sort(
-      (
-        a,
-        b
-      ) =>
-        new Date(
-          b.timestamp
-        ).getTime()
-        -
-        new Date(
-          a.timestamp
-        ).getTime()
-    );
+  return result.rows.map(mapRow);
 
 }
+
+
 /*
 ==================================================
 GET BY DOMAIN
@@ -840,7 +576,6 @@ GET BY DOMAIN
 export async function getVerificationAttemptsByDomain(
   domain:string
 ):Promise<VerificationAttemptRecord[]> {
-
 
   const normalizedDomain =
     normalizeDomain(
@@ -858,31 +593,18 @@ export async function getVerificationAttemptsByDomain(
 
   }
 
+  const db = getDatabase();
 
+  const result = await db.query<AttemptHistoryRow>(
+    `
+    SELECT * FROM verification_attempt_history
+    WHERE domain = $1
+    ORDER BY created_at DESC
+    `,
+    [normalizedDomain]
+  );
 
-  const records =
-    await readAllRecords();
-
-
-
-  return records
-    .filter(
-      record =>
-        record.domain === normalizedDomain
-    )
-    .sort(
-      (
-        a,
-        b
-      ) =>
-        new Date(
-          b.timestamp
-        ).getTime()
-        -
-        new Date(
-          a.timestamp
-        ).getTime()
-    );
+  return result.rows.map(mapRow);
 
 }
 
@@ -1166,46 +888,8 @@ CLEAR HISTORY
 export async function clearVerificationAttemptHistory()
 :Promise<void>{
 
+  const db = getDatabase();
 
-  await mkdir(
-    DEFAULT_STORAGE_DIR,
-    {
-      recursive:true
-    }
-  );
-
-
-
-  const {
-    writeFile
-  } =
-    await import(
-      "node:fs/promises"
-    );
-
-
-
-  await writeFile(
-    DEFAULT_STORAGE_FILE,
-    "",
-    "utf8"
-  );
-
-}
-
-
-
-/*
-==================================================
-STORAGE LOCATION
-==================================================
-*/
-
-
-export function getVerificationAttemptHistoryStoragePath()
-:string{
-
-
-  return DEFAULT_STORAGE_FILE;
+  await db.query(`TRUNCATE TABLE verification_attempt_history`);
 
 }

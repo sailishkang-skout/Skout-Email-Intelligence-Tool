@@ -83,12 +83,11 @@ extends BaseRepository {
   */
 
 
-  save(
+  async save(
     input:CreateEvidenceInput
-  ):void {
+  ):Promise<void> {
 
-
-    this.executeRun(
+    await this.executeRun(
 `
 INSERT INTO verification_evidence
 (
@@ -105,40 +104,23 @@ INSERT INTO verification_evidence
 
 VALUES
 (
- ?,
- ?,
- ?,
- ?,
- ?,
- ?,
- ?,
- ?,
- ?
+ $1, $2, $3, $4, $5, $6, $7, $8, NOW()
 )
 
 `,
-      this.uuid(),
-
-      input.verificationId,
-
-      input.evidenceType,
-
-      input.source,
-
-      input.signal,
-
-      input.value ?? null,
-
-      input.confidenceScore ?? null,
-
-      input.metadata
-        ? JSON.stringify(input.metadata)
-        : null,
-
-      this.now()
-
+      [
+        this.uuid(),
+        input.verificationId,
+        input.evidenceType,
+        input.source,
+        input.signal,
+        input.value ?? null,
+        input.confidenceScore ?? null,
+        input.metadata
+          ? JSON.stringify(input.metadata)
+          : null,
+      ]
     );
-
 
   }
 
@@ -151,10 +133,9 @@ VALUES
   */
 
 
-  findByVerificationId(
+  async findByVerificationId(
     verificationId:string
-  ):VerificationEvidenceRecord[] {
-
+  ):Promise<VerificationEvidenceRecord[]> {
 
     return this.queryMany<VerificationEvidenceRecord>(
 `
@@ -162,13 +143,12 @@ SELECT *
 
 FROM verification_evidence
 
-WHERE verification_id = ?
+WHERE verification_id = $1
 
 ORDER BY created_at ASC
 `,
-      verificationId
+      [verificationId]
     );
-
 
   }
 
@@ -181,20 +161,18 @@ ORDER BY created_at ASC
   */
 
 
-  deleteByVerificationId(
+  async deleteByVerificationId(
     verificationId:string
-  ):number {
-
+  ):Promise<number> {
 
     return this.executeDelete(
 `
 DELETE FROM verification_evidence
 
-WHERE verification_id = ?
+WHERE verification_id = $1
 `,
-      verificationId
+      [verificationId]
     );
-
 
   }
 

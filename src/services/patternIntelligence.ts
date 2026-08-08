@@ -1056,94 +1056,142 @@ DATABASE QUERIES
 ==================================================
 */
 
-const getPatternsForDomain =
-  db.prepare(`
-    SELECT
-      domain,
+async function queryPatternsForDomain(
+  domain: string
+): Promise<PatternHistoryRow[]> {
 
-      pattern,
+  const result =
+    await db.query(
+      `
+      SELECT
+        domain,
+        pattern,
+        attempts,
+        successes,
+        failures,
+        confidence,
+        first_seen_at AS "firstSeenAt",
+        last_seen_at AS "lastSeenAt"
 
-      attempts,
+      FROM pattern_history
 
-      successes,
+      WHERE domain = $1
 
-      failures,
+      ORDER BY
+        confidence DESC,
+        successes DESC,
+        attempts DESC
+      `,
+      [domain]
+    );
 
-      confidence,
+  return result.rows.map(normalizeHistoryRow);
 
-      first_seen_at AS firstSeenAt,
+}
 
-      last_seen_at AS lastSeenAt
+async function queryObservationAggregatesForDomain(
+  domain: string
+): Promise<ObservationAggregateRow[]> {
 
-    FROM pattern_history
+  const result =
+    await db.query(
+      `
+      SELECT
+        domain,
+        pattern,
+        COUNT(*) AS "observationCount",
+        SUM(
+          CASE WHEN outcome = 'SUCCESS' THEN 1 ELSE 0 END
+        ) AS "successfulObservations",
+        SUM(
+          CASE WHEN outcome = 'FAILURE' THEN 1 ELSE 0 END
+        ) AS "failedObservations",
+        MAX(observed_at) AS "latestObservedAt"
 
-    WHERE
-      domain = ?
+      FROM pattern_observations
 
-    ORDER BY
-      confidence DESC,
-      successes DESC,
-      attempts DESC
-  `);
+      WHERE domain = $1
 
-const getObservationAggregatesForDomain =
-  db.prepare(`
-    SELECT
+      GROUP BY domain, pattern
+      `,
+      [domain]
+    );
 
-      domain,
+  return result.rows.map(row => ({
 
-      pattern,
+    ...row,
 
-      COUNT(*) AS observationCount,
+    observationCount: Number(row.observationCount),
 
-      SUM(
-        CASE
-          WHEN outcome = 'SUCCESS'
-          THEN 1
-          ELSE 0
-        END
-      ) AS successfulObservations,
+    successfulObservations: Number(row.successfulObservations),
 
-      SUM(
-        CASE
-          WHEN outcome = 'FAILURE'
-          THEN 1
-          ELSE 0
-        END
-      ) AS failedObservations,
+    failedObservations: Number(row.failedObservations),
 
-      MAX(
-        observed_at
-      ) AS latestObservedAt
+    latestObservedAt:
+      row.latestObservedAt instanceof Date
+        ? row.latestObservedAt.toISOString()
+        : row.latestObservedAt,
 
-    FROM pattern_observations
+  }));
 
-    WHERE
-      domain = ?
+}
 
-    GROUP BY
-      domain,
-      pattern
-  `);
+async function queryPatternHistory(
+  domain: string,
+  pattern: string
+): Promise<PatternHistoryRow | undefined> {
 
-const getPatternHistory =
-  db.prepare(`
-    SELECT
-      domain,
-      pattern,
-      attempts,
-      successes,
-      failures,
-      confidence,
-      first_seen_at AS firstSeenAt,
-      last_seen_at AS lastSeenAt
+  const result =
+    await db.query(
+      `
+      SELECT
+        domain,
+        pattern,
+        attempts,
+        successes,
+        failures,
+        confidence,
+        first_seen_at AS "firstSeenAt",
+        last_seen_at AS "lastSeenAt"
 
-    FROM pattern_history
+      FROM pattern_history
 
-    WHERE
-      domain = ?
-      AND pattern = ?
-  `);
+      WHERE domain = $1
+        AND pattern = $2
+      `,
+      [domain, pattern]
+    );
+
+  const row = result.rows[0];
+
+  return row ? normalizeHistoryRow(row) : undefined;
+
+}
+
+function normalizeHistoryRow(
+  row: Record<string, unknown>
+): PatternHistoryRow {
+
+  const firstSeenAt = row.firstSeenAt;
+  const lastSeenAt = row.lastSeenAt;
+
+  return {
+
+    ...row,
+
+    firstSeenAt:
+      firstSeenAt instanceof Date
+        ? firstSeenAt.toISOString()
+        : String(firstSeenAt),
+
+    lastSeenAt:
+      lastSeenAt instanceof Date
+        ? lastSeenAt.toISOString()
+        : String(lastSeenAt),
+
+  } as PatternHistoryRow;
+
+}
 
 /*
 ==================================================
@@ -1151,18 +1199,17 @@ OBSERVATION AGGREGATES
 ==================================================
 */
 
-function loadObservationAggregates(
+async function loadObservationAggregates(
   domain: string
-): Map<
+): Promise<Map<
   string,
   ObservationAggregateRow
-> {
+>> {
 
   const rows =
-    getObservationAggregatesForDomain
-      .all(
-        domain
-      ) as ObservationAggregateRow[];
+    await queryObservationAggregatesForDomain(
+      domain
+    );
 
   const result =
     new Map<
@@ -1679,9 +1726,9 @@ PUBLIC API
  * Get intelligence for every known pattern
  * belonging to a domain.
  */
-export function getPatternIntelligence(
+export async function getPatternIntelligence(
   domainInput: string
-): PatternIntelligenceResult {
+): Promise<PatternIntelligenceResult> {
 
   const domain =
     normalizeDomain(
@@ -1708,10 +1755,9 @@ export function getPatternIntelligence(
   }
 
   const historyRows =
-    getPatternsForDomain
-      .all(
-        domain
-      ) as PatternHistoryRow[];
+    await queryPatternsForDomain(
+      domain
+    );
 
   if (
     historyRows.length === 0
@@ -1735,7 +1781,7 @@ export function getPatternIntelligence(
   }
 
   const observationMap =
-    loadObservationAggregates(
+    await loadObservationAggregates(
       domain
     );
 
@@ -1817,13 +1863,16 @@ const patterns =
  * a semantic API when they only care about
  * ranking.
  */
-export function calculatePatternIntelligence(
+export async function calculatePatternIntelligence(
   domain: string
-): PatternIntelligenceRecord[] {
+): Promise<PatternIntelligenceRecord[]> {
 
-  return getPatternIntelligence(
-    domain
-  ).patterns;
+  const result =
+    await getPatternIntelligence(
+      domain
+    );
+
+  return result.patterns;
 
 }
 
@@ -1831,23 +1880,26 @@ export function calculatePatternIntelligence(
  * Get the highest-ranked usable pattern
  * for a domain.
  */
-export function getBestPattern(
+export async function getBestPattern(
   domain: string
-): PatternIntelligenceRecord | null {
+): Promise<PatternIntelligenceRecord | null> {
 
-  return getPatternIntelligence(
-    domain
-  ).bestPattern;
+  const result =
+    await getPatternIntelligence(
+      domain
+    );
+
+  return result.bestPattern;
 
 }
 
 /**
  * Get intelligence for one specific pattern.
  */
-export function getPatternPatternIntelligence(
+export async function getPatternPatternIntelligence(
   domainInput: string,
   patternInput: string
-): PatternIntelligenceRecord | null {
+): Promise<PatternIntelligenceRecord | null> {
 
   const domain =
     normalizeDomain(
@@ -1869,12 +1921,10 @@ export function getPatternPatternIntelligence(
   }
 
   const history =
-    getPatternHistory.get(
+    await queryPatternHistory(
       domain,
       pattern
-    ) as
-      | PatternHistoryRow
-      | undefined;
+    );
 
   if (
     !history
@@ -1885,7 +1935,7 @@ export function getPatternPatternIntelligence(
   }
 
   const observationMap =
-    loadObservationAggregates(
+    await loadObservationAggregates(
       domain
     );
 

@@ -212,10 +212,10 @@ READ
 */
 
 
-export function getPatternHistory(
+export async function getPatternHistory(
   domain: string,
   pattern: string
-): PatternHistoryRecord | null {
+): Promise<PatternHistoryRecord | null> {
 
 
   const normalized =
@@ -226,7 +226,7 @@ export function getPatternHistory(
 
 
   const row =
-    repository.find(
+    await repository.find(
       normalized.domain,
       normalized.pattern
     );
@@ -240,9 +240,9 @@ export function getPatternHistory(
 
 
 
-export function getPatternHistoriesForDomain(
+export async function getPatternHistoriesForDomain(
   domain: string
-): PatternHistoryRecord[] {
+): Promise<PatternHistoryRecord[]> {
 
 
   const normalized =
@@ -256,21 +256,22 @@ export function getPatternHistoriesForDomain(
   }
 
 
-  return repository
-    .findByDomain(normalized)
-    .map(mapHistory);
+  const rows =
+    await repository.findByDomain(normalized);
+
+  return rows.map(mapHistory);
 
 }
 
 
 
-export function getAllPatternHistory()
-: PatternHistoryRecord[] {
+export async function getAllPatternHistory()
+: Promise<PatternHistoryRecord[]> {
 
+  const rows =
+    await repository.findAll();
 
-  return repository
-    .findAll()
-    .map(mapHistory);
+  return rows.map(mapHistory);
 
 }
 
@@ -283,9 +284,9 @@ CREATE OBSERVATION
 */
 
 
-export function recordPatternObservation(
+export async function recordPatternObservation(
   input: PatternObservationInput
-): RecordPatternObservationResult {
+): Promise<RecordPatternObservationResult> {
 
 
   const normalized =
@@ -296,7 +297,7 @@ export function recordPatternObservation(
 
 
   const existing =
-    repository.find(
+    await repository.find(
       normalized.domain,
       normalized.pattern
     );
@@ -339,7 +340,7 @@ export function recordPatternObservation(
 
 
 
-  repository.upsert({
+  await repository.upsert({
 
     domain: normalized.domain,
 
@@ -389,14 +390,14 @@ export function recordPatternObservation(
 
 
   const observationId =
-    repository.insertObservation(
+    await repository.insertObservation(
       observation
     );
 
 
 
   const updated =
-    repository.find(
+    await repository.find(
       normalized.domain,
       normalized.pattern
     );
@@ -431,37 +432,40 @@ HELPERS
 */
 
 
-export function recordPatternResult(
+export async function recordPatternResult(
   domain: string,
   pattern: string,
   outcome: PatternOutcome,
   source: PatternObservationSource = "OTHER",
   responseCode: number | null = null,
   verificationId: string | null = null
-): PatternHistoryRecord {
+): Promise<PatternHistoryRecord> {
 
 
-  return recordPatternObservation({
+  const result =
+    await recordPatternObservation({
 
-    domain,
+      domain,
 
-    pattern,
+      pattern,
 
-    outcome,
+      outcome,
 
-    source,
+      source,
 
-    responseCode,
+      responseCode,
 
-    verificationId
+      verificationId
 
-  }).history;
+    });
+
+  return result.history;
 
 }
 
 
 
-export function recordPatternSuccess(
+export async function recordPatternSuccess(
   domain: string,
   pattern: string,
   source: PatternObservationSource = "OTHER",
@@ -482,7 +486,7 @@ export function recordPatternSuccess(
 
 
 
-export function recordPatternFailure(
+export async function recordPatternFailure(
   domain: string,
   pattern: string,
   source: PatternObservationSource = "OTHER",
@@ -510,10 +514,10 @@ RESET
 */
 
 
-export function resetPatternHistory(
+export async function resetPatternHistory(
   domain: string,
   pattern: string
-): boolean {
+): Promise<boolean> {
 
   const normalized =
     validate(
@@ -531,9 +535,9 @@ export function resetPatternHistory(
 
 
 
-export function resetDomainPatternHistory(
+export async function resetDomainPatternHistory(
   domain: string
-): number {
+): Promise<number> {
 
   return repository.deleteDomain(
     normalizeDomain(domain)
@@ -550,7 +554,7 @@ OBSERVATIONS
 */
 
 
-export function getPatternObservations(
+export async function getPatternObservations(
   domain: string,
   pattern: string
 ) {

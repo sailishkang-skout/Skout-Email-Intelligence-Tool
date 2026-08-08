@@ -163,7 +163,7 @@ export default async function patternRankRoutes(
 
 
       const result =
-        rankEmailCandidates(
+        await rankEmailCandidates(
           body.domain,
           candidates
         );

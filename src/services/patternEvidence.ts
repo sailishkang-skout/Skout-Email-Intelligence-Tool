@@ -580,13 +580,11 @@ export async function evaluatePatternEvidence(
   }
 
   const {
-    email,
     domain,
     pattern,
     smtpValid,
     mailboxExists,
     responseCode,
-    responseMessage,
     catchAll,
     source,
     verificationId

@@ -1,93 +1,60 @@
-import DatabaseConstructor, {
-  type Database as BetterSqlite3Database
-} from "better-sqlite3";
+import pg from "pg";
 
-import fs from "node:fs";
-import path from "node:path";
-
-import {
-  runMigrations
-} from "./migrations.js";
-
+import { config } from "../config/config.js";
 
 /*
-DATABASE_PATH allows tests and deployments to point
-at an isolated database file instead of the default
-local development path.
+==================================================
+POSTGRESQL CONNECTION POOL
+==================================================
+
+Single pooled connection, shared by every
+repository. Business logic must never reach for
+`pg` directly — go through getDatabase()/query()
+so pooling, timeouts, and SSL configuration stay
+centralized here.
+==================================================
 */
 
-const databasePath =
-  process.env.DATABASE_PATH
-    ? path.resolve(
-        process.env.DATABASE_PATH
-      )
-    : path.join(
-        path.resolve(
-          process.cwd(),
-          "data"
-        ),
-        "email-intelligence.db"
-      );
+export type DatabaseConnection = pg.Pool;
 
+const pool = new pg.Pool({
+  connectionString: config.database.url,
+  max: config.database.poolMax,
+  idleTimeoutMillis: config.database.idleTimeoutMs,
+  connectionTimeoutMillis: config.database.connectionTimeoutMs,
+  ssl: config.database.ssl
+    ? {
+        // Managed Postgres providers (RDS, Supabase, etc.) commonly
+        // terminate TLS with certificates that aren't in Node's
+        // default trust store reachable from arbitrary hosts. This
+        // still encrypts the connection; it does not disable TLS.
+        rejectUnauthorized: false,
+      }
+    : false,
+});
 
-fs.mkdirSync(
-  path.dirname(
-    databasePath
-  ),
-  {
-    recursive:true
-  }
-);
-
-
-export type DatabaseConnection =
-  BetterSqlite3Database;
-
-
-
-const database: DatabaseConnection =
-  new DatabaseConstructor(
-    databasePath
-  );
-
-
-database.pragma(
-  "journal_mode = WAL"
-);
-
-
-database.pragma(
-  "foreign_keys = ON"
-);
-
-
-database.pragma(
-  "busy_timeout = 5000"
-);
-
-
-
-runMigrations(database);
-
+pool.on("error", (error) => {
+  // Errors on idle clients (e.g. connection reset by the server)
+  // must not crash the process — the pool will create a fresh
+  // connection on the next query.
+  console.error("[Database] Unexpected error on idle client:", error);
+});
 
 export function getDatabase(): DatabaseConnection {
-
-  return database;
-
+  return pool;
 }
 
+export async function closeDatabase(): Promise<void> {
+  await pool.end();
+}
 
-
-export function closeDatabase(): void {
-
-  if(database.open){
-
-    database.close();
-
+export async function pingDatabase(): Promise<boolean> {
+  try {
+    await pool.query("SELECT 1");
+    return true;
+  } catch {
+    return false;
   }
-
 }
 
-
-
-export default database;
+export default pool;

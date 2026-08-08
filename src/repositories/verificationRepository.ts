@@ -157,16 +157,11 @@ extends BaseRepository {
   */
 
 
-  save(
+  async save(
     input:CreateVerificationResultInput
-  ):void {
+  ):Promise<void> {
 
-
-    const now =
-      this.now();
-
-
-    this.executeRun(
+    await this.executeRun(
 `
 INSERT INTO verification_results (
 
@@ -196,75 +191,54 @@ INSERT INTO verification_results (
 )
 
 VALUES (
-
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?,
-    ?
-
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+    $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+    NOW(), NOW()
 )
 
 ON CONFLICT(verification_id)
 DO UPDATE SET
 
-    request_id = excluded.request_id,
-    provider = excluded.provider,
-    response_code = excluded.response_code,
-    response_message = excluded.response_message,
-    smtp_valid = excluded.smtp_valid,
-    mailbox_exists = excluded.mailbox_exists,
-    mx_available = excluded.mx_available,
-    catch_all = excluded.catch_all,
-    retry_required = excluded.retry_required,
-    retry_reason = excluded.retry_reason,
-    confidence_score = excluded.confidence_score,
-    confidence_level = excluded.confidence_level,
-    decision = excluded.decision,
-    recommendation = excluded.recommendation,
-    verification_status = excluded.verification_status,
-    updated_at = excluded.updated_at
+    request_id = EXCLUDED.request_id,
+    provider = EXCLUDED.provider,
+    response_code = EXCLUDED.response_code,
+    response_message = EXCLUDED.response_message,
+    smtp_valid = EXCLUDED.smtp_valid,
+    mailbox_exists = EXCLUDED.mailbox_exists,
+    mx_available = EXCLUDED.mx_available,
+    catch_all = EXCLUDED.catch_all,
+    retry_required = EXCLUDED.retry_required,
+    retry_reason = EXCLUDED.retry_reason,
+    confidence_score = EXCLUDED.confidence_score,
+    confidence_level = EXCLUDED.confidence_level,
+    decision = EXCLUDED.decision,
+    recommendation = EXCLUDED.recommendation,
+    verification_status = EXCLUDED.verification_status,
+    updated_at = NOW()
 
 `,
-      this.uuid(),
-      input.verificationId,
-      input.requestId ?? null,
-      this.normalizeEmail(input.email),
-      this.normalizeDomain(input.domain),
-      input.pattern ?? null,
-      input.provider ?? null,
-      input.responseCode ?? null,
-      input.responseMessage ?? null,
-      this.sqliteBool(input.smtpValid),
-      this.sqliteBool(input.mailboxExists),
-      this.sqliteBool(input.mxAvailable),
-      this.sqliteBool(input.catchAll),
-      this.sqliteBool(input.retryRequired),
-      input.retryReason ?? null,
-      input.confidenceScore ?? null,
-      input.confidenceLevel ?? null,
-      input.decision ?? null,
-      input.recommendation ?? null,
-      input.verificationStatus ?? null,
-      now,
-      now
+      [
+        this.uuid(),
+        input.verificationId,
+        input.requestId ?? null,
+        this.normalizeEmail(input.email),
+        this.normalizeDomain(input.domain),
+        input.pattern ?? null,
+        input.provider ?? null,
+        input.responseCode ?? null,
+        input.responseMessage ?? null,
+        this.sqliteBool(input.smtpValid),
+        this.sqliteBool(input.mailboxExists),
+        this.sqliteBool(input.mxAvailable),
+        this.sqliteBool(input.catchAll),
+        this.sqliteBool(input.retryRequired),
+        input.retryReason ?? null,
+        input.confidenceScore ?? null,
+        input.confidenceLevel ?? null,
+        input.decision ?? null,
+        input.recommendation ?? null,
+        input.verificationStatus ?? null,
+      ]
     );
 
   }
@@ -278,20 +252,19 @@ DO UPDATE SET
   */
 
 
-  findByVerificationId(
+  async findByVerificationId(
     verificationId:string
-  ):VerificationResultRecord|null {
-
+  ):Promise<VerificationResultRecord|null> {
 
     const row =
-      this.queryOne<VerificationResultRecord>(
+      await this.queryOne<VerificationResultRecord>(
 `
 SELECT *
 FROM verification_results
-WHERE verification_id = ?
+WHERE verification_id = $1
 LIMIT 1
 `,
-        verificationId
+        [verificationId]
       );
 
     return row
@@ -309,21 +282,20 @@ LIMIT 1
   */
 
 
-  findLatestByEmail(
+  async findLatestByEmail(
     email:string
-  ):VerificationResultRecord|null {
-
+  ):Promise<VerificationResultRecord|null> {
 
     const row =
-      this.queryOne<VerificationResultRecord>(
+      await this.queryOne<VerificationResultRecord>(
 `
 SELECT *
 FROM verification_results
-WHERE email = ?
+WHERE email = $1
 ORDER BY created_at DESC
 LIMIT 1
 `,
-        this.normalizeEmail(email)
+        [this.normalizeEmail(email)]
       );
 
     return row
@@ -341,22 +313,22 @@ LIMIT 1
   */
 
 
-  findByDomain(
+  async findByDomain(
     domain:string
-  ):VerificationResultRecord[] {
+  ):Promise<VerificationResultRecord[]> {
 
-
-    return this.queryMany<VerificationResultRecord>(
+    const rows =
+      await this.queryMany<VerificationResultRecord>(
 `
 SELECT *
 FROM verification_results
-WHERE domain = ?
+WHERE domain = $1
 ORDER BY created_at DESC
 `,
-      this.normalizeDomain(domain)
-    ).map(
-      row => this.normalizeRow(row)
-    );
+        [this.normalizeDomain(domain)]
+      );
+
+    return rows.map(row => this.normalizeRow(row));
 
   }
 
@@ -367,11 +339,10 @@ ORDER BY created_at DESC
   NORMALIZE ROW
   ==================================================
 
-  better-sqlite3 returns SQLite integers (0/1/null)
-  for the boolean columns, not JS booleans. Callers
-  (including strict type guards in the send-eligibility
-  policy) rely on real booleans, so normalize here once
-  rather than at every call site.
+  Converts TIMESTAMPTZ columns (returned by pg as
+  Date objects) back to ISO strings, matching the
+  existing interface contract used throughout the
+  rest of the codebase.
   */
 
   private normalizeRow(
@@ -382,20 +353,11 @@ ORDER BY created_at DESC
 
       ...row,
 
-      smtp_valid:
-        this.nullableBool(row.smtp_valid),
+      created_at:
+        this.isoString(row.created_at) ?? row.created_at,
 
-      mailbox_exists:
-        this.nullableBool(row.mailbox_exists),
-
-      mx_available:
-        this.nullableBool(row.mx_available),
-
-      catch_all:
-        this.nullableBool(row.catch_all),
-
-      retry_required:
-        this.nullableBool(row.retry_required)
+      updated_at:
+        this.isoString(row.updated_at) ?? row.updated_at,
 
     };
 
@@ -410,18 +372,17 @@ ORDER BY created_at DESC
   */
 
 
-  existsByVerificationId(
+  async existsByVerificationId(
     verificationId:string
-  ):boolean {
-
+  ):Promise<boolean> {
 
     return this.exists(
 `
 SELECT 1
 FROM verification_results
-WHERE verification_id = ?
+WHERE verification_id = $1
 `,
-      verificationId
+      [verificationId]
     );
 
   }
@@ -435,17 +396,16 @@ WHERE verification_id = ?
   */
 
 
-  deleteByVerificationId(
+  async deleteByVerificationId(
     verificationId:string
-  ):number {
-
+  ):Promise<number> {
 
     return this.executeDelete(
 `
 DELETE FROM verification_results
-WHERE verification_id = ?
+WHERE verification_id = $1
 `,
-      verificationId
+      [verificationId]
     );
 
   }
