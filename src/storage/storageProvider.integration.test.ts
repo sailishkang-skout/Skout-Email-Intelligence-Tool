@@ -18,9 +18,12 @@ import {
   getSignedDownloadUrl,
 } from "./storageProvider.js";
 
+import { requireStorage } from "../testHelpers/requireInfra.js";
+
 const tenantId = "test-tenant";
 
 test.before(async () => {
+  await requireStorage();
   await ensureBucketExists();
 });
 

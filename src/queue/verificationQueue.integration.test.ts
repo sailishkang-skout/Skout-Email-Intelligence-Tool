@@ -9,6 +9,9 @@ import {
 } from "./verificationQueue.js";
 
 import { closeRedis } from "../redis/redisClient.js";
+import { requireRedis } from "../testHelpers/requireInfra.js";
+
+test.before(() => requireRedis());
 
 test("verificationQueue: enqueueing a job is reflected in queue counts", async () => {
 

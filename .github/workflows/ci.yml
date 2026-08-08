@@ -46,14 +46,38 @@ jobs:
           fi
 
   # ==================================================
-  # UNIT + INTEGRATION TESTS
+  # UNIT TESTS
   # ==================================================
-  # The test suite includes real integration tests (Postgres, Redis,
-  # MinIO) — not just unit tests against mocks — so CI stands up the
-  # same infrastructure classes as production rather than testing
-  # PostgreSQL-shaped code against SQLite.
-  test:
-    name: Unit & Integration Tests
+  # Pure logic tests (confidence/decision/status engines, send-
+  # eligibility policy, SSRF guard) — no Postgres/Redis/MinIO
+  # required. Kept separate from integration-tests so a missing
+  # local/CI service dependency can never affect these, and so they
+  # run fast without waiting on service container health checks.
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Run unit tests (no infrastructure required)
+        run: npm run test:unit
+
+  # ==================================================
+  # INTEGRATION TESTS
+  # ==================================================
+  # Real Postgres, Redis, and MinIO — not mocks — so CI exercises
+  # the same infrastructure classes as production rather than
+  # testing PostgreSQL-shaped code against SQLite or Redis-shaped
+  # code against an in-memory fake.
+  integration-tests:
+    name: Integration Tests
     runs-on: ubuntu-latest
 
     services:
@@ -118,8 +142,8 @@ jobs:
       - name: Run PostgreSQL migrations
         run: npm run migrate
 
-      - name: Run test suite (unit + Postgres/Redis/queue/storage integration)
-        run: npm test
+      - name: Run integration tests (Postgres/Redis/queue/storage)
+        run: npm run test:integration
 
   # ==================================================
   # SECURITY
@@ -153,7 +177,7 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
-    needs: [static-checks, test]
+    needs: [static-checks, unit-tests, integration-tests]
     steps:
       - uses: actions/checkout@v4
 
@@ -200,7 +224,7 @@ jobs:
   deployment-gate:
     name: Deployment Gate
     runs-on: ubuntu-latest
-    needs: [static-checks, test, security, build, docker]
+    needs: [static-checks, unit-tests, integration-tests, security, build, docker]
     if: always()
     steps:
       - name: Verify all required jobs succeeded

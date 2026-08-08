@@ -9,6 +9,9 @@ import {
 } from "./idempotency.js";
 
 import { closeRedis } from "./redisClient.js";
+import { requireRedis } from "../testHelpers/requireInfra.js";
+
+test.before(() => requireRedis());
 
 test("idempotency: runIdempotent executes the operation exactly once for a given key", async () => {
   const key = `test-idempotency-${randomUUID()}`;

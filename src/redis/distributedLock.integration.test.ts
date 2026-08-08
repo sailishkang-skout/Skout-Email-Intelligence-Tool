@@ -4,6 +4,9 @@ import { randomUUID } from "node:crypto";
 
 import { acquireLock, withLock } from "./distributedLock.js";
 import { closeRedis } from "./redisClient.js";
+import { requireRedis } from "../testHelpers/requireInfra.js";
+
+test.before(() => requireRedis());
 
 test("distributedLock: a second acquire attempt fails while the first holds the lock", async () => {
   const key = `test-lock-${randomUUID()}`;

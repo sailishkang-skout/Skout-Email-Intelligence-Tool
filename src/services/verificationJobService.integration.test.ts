@@ -19,6 +19,10 @@ import {
   updateJobProgress,
 } from "./verificationJobService.js";
 
+import { requirePostgres } from "../testHelpers/requireInfra.js";
+
+test.before(() => requirePostgres());
+
 test("verificationJobService: creating a job persists one item per email and dedupes", async () => {
   const job = await createVerificationJob([
     "a@example.com",
@@ -131,4 +135,9 @@ test("verificationJobService: mixed success/failure finalizes as COMPLETED (part
 test("verificationJobService: getVerificationJob returns null for an unknown id", async () => {
   const result = await getVerificationJob("00000000-0000-0000-0000-000000000000");
   assert.equal(result, null);
+});
+
+test.after(async () => {
+  const { closeDatabase } = await import("../database/database.js");
+  await closeDatabase();
 });
