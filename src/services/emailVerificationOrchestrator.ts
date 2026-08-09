@@ -29,8 +29,9 @@ import {
 } from "./patternIntelligence.js";
 
 import {
-  buildVerificationStatus
-} from "../types/verificationStatus.js";
+  buildVerificationStatus,
+  classifyVerificationErrorType
+} from "./verificationStatus.js";
 
 import {
   analyzeVerificationEvidence
@@ -1201,9 +1202,6 @@ patternTrend:
   patternIntelligence.bestPattern
     ?.trend ?? null,
 
-    confidenceStatus:
-      confidence.status,
-
     mailboxExists:
       smtp.mailboxExists,
 
@@ -1267,8 +1265,17 @@ await verificationEventRepository.createEvent({
     mxAvailable:
       smtp.mxAvailable,
 
+    mxHosts:
+      smtp.mxHosts,
+
+    primaryMX:
+      smtp.primaryMX,
+
     responseCode:
       smtp.responseCode,
+
+    responseMessage:
+      smtp.responseMessage,
 
     mailboxExists:
       smtp.mailboxExists,
@@ -1281,8 +1288,16 @@ await verificationEventRepository.createEvent({
     retryRequired:
       smtp.retryRequired,
 
-    smtpError:
-      smtp.error
+    retryReason:
+      smtp.retryReason,
+
+    error:
+      smtp.error,
+
+    errorType:
+      classifyVerificationErrorType(
+        smtp.error
+      )
 
   });
 

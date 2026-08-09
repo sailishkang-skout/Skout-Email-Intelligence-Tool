@@ -84,6 +84,13 @@ import {
   buildVerificationStatus,
 } from "../services/verificationStatus.js";
 
+import { extractErrorMessage } from "../utils/errorMessage.js";
+
+import {
+  runIdempotent,
+  IdempotencyInProgressError,
+} from "../redis/idempotency.js";
+
 import {
   createAuthoritativeVerificationRecord,
   type AuthoritativeVerificationRecord,
@@ -480,10 +487,44 @@ export default async function sendRoutes(
           });
       }
 
-      const persistedVerification =
-        await verificationRepository.findByVerificationId(
-          verificationId
+      let persistedVerification;
+
+      try {
+
+        persistedVerification =
+          await verificationRepository.findByVerificationId(
+            verificationId
+          );
+
+      } catch (
+        error: unknown
+      ) {
+
+        const message =
+          extractErrorMessage(error);
+
+        request.log.error(
+          {
+            error: message,
+
+            email,
+
+            verificationId,
+          },
+          "[SendRoute] Verification lookup failed"
         );
+
+        return reply
+          .code(500)
+          .send({
+            success: false,
+
+            email,
+
+            error:
+              "Verification lookup failed",
+          });
+      }
 
       if (
         !persistedVerification
@@ -773,42 +814,73 @@ export default async function sendRoutes(
 
       try {
 
+        /*
+        A verificationId authorizes exactly one outbound send. Without
+        this, replaying the same request (a client retry, or two
+        concurrent requests) triggers a separate real send through the
+        provider each time - confirmed live: three concurrent /send
+        calls with an identical verificationId produced three distinct
+        provider messageIds. Keying on verificationId alone (rather
+        than the full payload) means a second attempt - whatever its
+        outcome - is answered from the first attempt's cached result
+        instead of re-invoking the provider.
+        */
+
         result =
-          await sendOutboundEmail(
-            provider,
+          await runIdempotent(
+            `send:${verification.verificationId}`,
+            () =>
+              sendOutboundEmail(
+                provider,
 
-            {
-              from,
+                {
+                  from,
 
-              to:
-                email,
+                  to:
+                    email,
 
-              subject,
+                  subject,
 
-              ...(text !== undefined
-                ? {
-                    text,
-                  }
-                : {}),
+                  ...(text !== undefined
+                    ? {
+                        text,
+                      }
+                    : {}),
 
-              ...(html !== undefined
-                ? {
-                    html,
-                  }
-                : {}),
+                  ...(html !== undefined
+                    ? {
+                        html,
+                      }
+                    : {}),
 
-              verification,
-            }
+                  verification,
+                }
+              )
           );
 
       } catch (
         error: unknown
       ) {
 
+        if (
+          error instanceof IdempotencyInProgressError
+        ) {
+
+          return reply
+            .code(409)
+            .send({
+              success: false,
+
+              email,
+
+              error:
+                "A send for this verificationId is already in progress",
+            });
+
+        }
+
         const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
+          extractErrorMessage(error);
 
         request.log.error(
           {

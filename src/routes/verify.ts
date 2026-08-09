@@ -8,8 +8,11 @@ import mailchecker from "mailchecker";
 
 import { verifyEmail } from "../services/emailVerificationOrchestrator.js";
 
+import { extractErrorMessage } from "../utils/errorMessage.js";
+
 import {
   buildVerificationStatus,
+  classifyVerificationErrorType,
   type VerificationStatusResult,
 } from "../services/verificationStatus.js";
 
@@ -381,93 +384,6 @@ function getRequestId(
 
 /*
 ==================================================
-VERIFICATION ERROR TYPE
-==================================================
-*/
-
-type VerificationErrorType =
-  | "DNS"
-  | "SMTP"
-  | "NONE"
-  | null;
-
-/*
-==================================================
-CLASSIFY ERROR TYPE
-==================================================
-*/
-
-function classifyErrorType(
-  result: Awaited<
-    ReturnType<typeof verifyEmail>
-  >
-): VerificationErrorType {
-  if (!result.error) {
-    return "NONE";
-  }
-
-  /*
-  DNS-related errors.
-  */
-
-  if (
-    /dns/i.test(
-      result.error
-    ) ||
-    /mx/i.test(
-      result.error
-    ) ||
-    /enotfound/i.test(
-      result.error
-    ) ||
-    /getaddrinfo/i.test(
-      result.error
-    ) ||
-    /nxdomain/i.test(
-      result.error
-    )
-  ) {
-    return "DNS";
-  }
-
-  /*
-  SMTP-related errors.
-  */
-
-  if (
-    /smtp/i.test(
-      result.error
-    ) ||
-    /mailbox/i.test(
-      result.error
-    ) ||
-    /recipient/i.test(
-      result.error
-    ) ||
-    /connection/i.test(
-      result.error
-    ) ||
-    /timeout/i.test(
-      result.error
-    )
-  ) {
-    return "SMTP";
-  }
-
-  /*
-  The canonical verification status layer only
-  understands DNS / SMTP / NONE.
-
-  Unknown transport errors are therefore classified
-  as SMTP-level verification failure while the
-  original error remains available separately.
-  */
-
-  return "SMTP";
-}
-
-/*
-==================================================
 BUILD VERIFICATION STATUS INPUT
 ==================================================
 */
@@ -477,10 +393,9 @@ function buildStatusInput(
     ReturnType<typeof verifyEmail>
   >
 ) {
-  const errorType:
-    VerificationErrorType =
-    classifyErrorType(
-      result
+  const errorType =
+    classifyVerificationErrorType(
+      result.error
     );
 
   return {
@@ -868,9 +783,7 @@ export async function verifyRoute(
         error: unknown
       ) {
         const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
+          extractErrorMessage(error);
 
         request.log.error(
           {
@@ -921,9 +834,7 @@ export async function verifyRoute(
         error: unknown
       ) {
         const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
+          extractErrorMessage(error);
 
         request.log.error(
           {
@@ -1002,9 +913,7 @@ export async function verifyRoute(
         error: unknown
       ) {
         const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
+          extractErrorMessage(error);
 
         request.log.error(
           {
@@ -1084,9 +993,7 @@ export async function verifyRoute(
         error: unknown
       ) {
         const message =
-          error instanceof Error
-            ? error.message
-            : String(error);
+          extractErrorMessage(error);
 
         request.log.error(
           {
@@ -1346,10 +1253,37 @@ export async function verifyRoute(
       } = request.params;
 
 
-      const result =
-        await verificationRepository.findByVerificationId(
-          verificationId
+      let result;
+
+      try {
+
+        result =
+          await verificationRepository.findByVerificationId(
+            verificationId
+          );
+
+      } catch (
+        error: unknown
+      ) {
+
+        request.log.error(
+          {
+            error: extractErrorMessage(error),
+
+            verificationId,
+          },
+          "[VerifyRoute] Verification lookup failed"
         );
+
+        return reply
+          .code(500)
+          .send({
+            success: false,
+
+            error:
+              "Verification lookup failed",
+          });
+      }
 
 
       if(!result){

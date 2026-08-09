@@ -7,11 +7,14 @@ import {
   getVerificationJob,
   markJobRunning,
   listVerificationJobItems,
+  type VerificationJob,
 } from "../services/verificationJobService.js";
 
 import { enqueueVerificationItem } from "../queue/verificationQueue.js";
 
 import { config } from "../config/config.js";
+
+import { extractErrorMessage } from "../utils/errorMessage.js";
 
 
 /*
@@ -181,23 +184,53 @@ export default async function verifyBatchRoutes(
         });
       }
 
-      const job =
-        await createVerificationJob(emails);
+      let job: VerificationJob | undefined;
 
-      const items =
-        await listVerificationJobItems(job.jobId);
+      try {
 
-      await Promise.all(
-        items.map(item =>
-          enqueueVerificationItem({
-            itemId: item.id,
-            jobId: job.jobId,
-            email: item.email,
-          })
-        )
-      );
+        job =
+          await createVerificationJob(emails);
 
-      await markJobRunning(job.jobId);
+        const jobId =
+          job.jobId;
+
+        const items =
+          await listVerificationJobItems(jobId);
+
+        await Promise.all(
+          items.map(item =>
+            enqueueVerificationItem({
+              itemId: item.id,
+              jobId,
+              email: item.email,
+            })
+          )
+        );
+
+        await markJobRunning(jobId);
+
+      } catch (
+        error: unknown
+      ) {
+
+        request.log.error(
+          {
+            error: extractErrorMessage(error),
+
+            jobId: job?.jobId ?? null,
+          },
+          "[VerifyBatchRoute] Async batch job creation failed"
+        );
+
+        return reply
+          .code(500)
+          .send({
+            success: false,
+
+            error:
+              "Failed to create verification job",
+          });
+      }
 
       return reply.code(202).send({
 
@@ -231,20 +264,48 @@ export default async function verifyBatchRoutes(
       reply
     ) => {
 
-      const job =
-        await getVerificationJob(
-          request.params.jobId
+      let job;
+      let items;
+
+      try {
+
+        job =
+          await getVerificationJob(
+            request.params.jobId
+          );
+
+        if (!job) {
+          return reply.code(404).send({
+            success: false,
+            error: "Job not found",
+          });
+        }
+
+        items =
+          await listVerificationJobItems(job.id);
+
+      } catch (
+        error: unknown
+      ) {
+
+        request.log.error(
+          {
+            error: extractErrorMessage(error),
+
+            jobId: request.params.jobId,
+          },
+          "[VerifyBatchRoute] Job lookup failed"
         );
 
-      if (!job) {
-        return reply.code(404).send({
-          success: false,
-          error: "Job not found",
-        });
-      }
+        return reply
+          .code(500)
+          .send({
+            success: false,
 
-      const items =
-        await listVerificationJobItems(job.id);
+            error:
+              "Job lookup failed",
+          });
+      }
 
       return {
 

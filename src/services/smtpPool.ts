@@ -14,6 +14,18 @@ interface PoolEntry {
   host: string;
   createdAt: number;
   lastUsedAt: number;
+
+  /*
+  Reserved by the pool for a specific caller. This is distinct from
+  connection.isBusy, which SMTPConnection only sets once an SMTP
+  transaction actually starts (inside verifyRecipient()). Between
+  acquire() selecting an idle entry and the caller's first await
+  landing on that connection, isBusy is still false - a second
+  concurrent acquire() call for the same host would find the exact
+  same "idle" entry and hand it out too. claimed closes that gap by
+  being set synchronously, in the same tick the entry is selected.
+  */
+  claimed: boolean;
 }
 
 interface QueueItem {
@@ -162,7 +174,7 @@ export class SMTPPool {
       ) {
 
         if (
-          entry.connection.isBusy
+          entry.claimed
         ) {
 
           busy++;
@@ -296,13 +308,16 @@ export class SMTPPool {
       entries.find(
         (entry) =>
           entry.connection.isConnected &&
-          !entry.connection.isBusy
+          !entry.claimed
       );
 
     if (idle) {
 
       idle.lastUsedAt =
         Date.now();
+
+      idle.claimed =
+        true;
 
       return idle.connection;
 
@@ -368,7 +383,10 @@ export class SMTPPool {
           Date.now(),
 
         lastUsedAt:
-          Date.now()
+          Date.now(),
+
+        claimed:
+          true
 
       };
 
@@ -425,6 +443,9 @@ export class SMTPPool {
 
       entry.lastUsedAt =
         Date.now();
+
+      entry.claimed =
+        false;
 
     }
 
@@ -493,7 +514,7 @@ export class SMTPPool {
       entries.find(
         (entry) =>
           entry.connection.isConnected &&
-          !entry.connection.isBusy
+          !entry.claimed
       );
 
     if (!idle) {
@@ -510,6 +531,9 @@ export class SMTPPool {
       return;
 
     }
+
+    idle.claimed =
+      true;
 
     item.resolve(
       idle.connection
@@ -623,7 +647,7 @@ export class SMTPPool {
           entry.lastUsedAt;
 
         if (
-          !entry.connection.isBusy &&
+          !entry.claimed &&
           idleFor >
             this.idleTimeoutMs
         ) {

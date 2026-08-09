@@ -1,6 +1,6 @@
 import type {
   VerificationStatusResult
-} from "./verificationStatus.js";
+} from "../services/verificationStatus.js";
 
 import type {
   EvidenceSignal

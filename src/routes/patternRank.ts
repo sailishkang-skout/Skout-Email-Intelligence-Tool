@@ -4,6 +4,8 @@ import {
   rankEmailCandidates
 } from "../services/patternRanker.js";
 
+import { extractErrorMessage } from "../utils/errorMessage.js";
+
 
 interface PatternRankRequest {
 
@@ -162,11 +164,38 @@ export default async function patternRankRoutes(
       */
 
 
-      const result =
-        await rankEmailCandidates(
-          body.domain,
-          candidates
+      let result;
+
+      try {
+
+        result =
+          await rankEmailCandidates(
+            body.domain,
+            candidates
+          );
+
+      } catch (
+        error: unknown
+      ) {
+
+        request.log.error(
+          {
+            error: extractErrorMessage(error),
+
+            domain: body.domain,
+          },
+          "[PatternRankRoute] Ranking failed"
         );
+
+        return reply
+          .code(500)
+          .send({
+            success: false,
+
+            error:
+              "Pattern ranking failed",
+          });
+      }
 
 
 

@@ -12,6 +12,18 @@ export interface SMTPConnectionOptions {
   port?: number;
   timeoutMs?: number;
   heloDomain?: string;
+
+  /*
+  Absolute upper bound on this connection's total lifetime, from
+  connect through the final RCPT TO response, regardless of
+  activity. `timeoutMs` (via socket.setTimeout) is an IDLE timeout —
+  it resets on any byte sent or received, so a server that trickles
+  data slowly (or a deliberate SMTP tarpit designed to stall
+  verification bots) can keep a connection "active" indefinitely
+  without ever completing. This is a separate, unconditional
+  backstop.
+  */
+  hardTimeoutMs?: number;
 }
 
 export class SMTPConnection {
@@ -24,11 +36,15 @@ export class SMTPConnection {
 
   private lastUsedAt = Date.now();
 
+  private hardDeadlineTimer: NodeJS.Timeout | null = null;
+
   private readonly host: string;
 
   private readonly port: number;
 
   private readonly timeoutMs: number;
+
+  private readonly hardTimeoutMs: number;
 
   private readonly heloDomain: string;
 
@@ -44,6 +60,9 @@ export class SMTPConnection {
 
     this.timeoutMs =
       options.timeoutMs ?? 10000;
+
+    this.hardTimeoutMs =
+      options.hardTimeoutMs ?? this.timeoutMs * 3;
 
     this.heloDomain =
       options.heloDomain ?? "skout.ai";
@@ -103,9 +122,61 @@ export class SMTPConnection {
     this.socket =
       socket;
 
+    /*
+    Permanent baseline listener for this socket's entire lifetime,
+    independent of the per-operation listeners connect()/readResponse()
+    attach and remove around each individual await. Without this, a
+    socket that finishes connecting and sits idle in the pool (between
+    verifyRecipient() calls, or waiting for SMTPPool's own idle
+    cleanup) has NO 'error' listener at all once its last operation
+    settled. If the hard deadline timer below then fires while the
+    connection is idle - or the remote sends a stray error for any
+    other reason with nothing currently awaiting a response - Node
+    treats an 'error' event with zero listeners as fatal and crashes
+    the entire process. This listener guarantees 'error' is always
+    handled; the operation-scoped listeners (which also still fire)
+    remain responsible for rejecting whatever promise is in flight.
+    */
+
+    socket.on(
+      "error",
+      (error: Error) => {
+
+        console.error(
+          `[SMTPConnection] Socket error for ${this.host}:`,
+          error.message
+        );
+
+      }
+    );
+
     socket.setTimeout(
       this.timeoutMs
     );
+
+    /*
+    Unconditional deadline for this connection's entire lifetime.
+    Fires regardless of the idle-timeout resets above — a server
+    that never completes a response but keeps trickling bytes (or
+    just holds the TCP connection open without ever writing) would
+    otherwise stall verification indefinitely. Passing an explicit
+    Error to destroy() ensures it surfaces through the same 'error'
+    handling that connect()/readResponse() already listen for,
+    rather than requiring new 'close' listeners everywhere.
+    */
+
+    this.hardDeadlineTimer =
+      setTimeout(() => {
+
+        socket.destroy(
+          new Error(
+            `SMTP connection exceeded hard deadline of ${this.hardTimeoutMs}ms`
+          )
+        );
+
+      }, this.hardTimeoutMs);
+
+    this.hardDeadlineTimer.unref();
 
     await new Promise<void>(
       (resolve, reject) => {
@@ -127,6 +198,11 @@ export class SMTPConnection {
           socket.removeListener(
             "timeout",
             onTimeout
+          );
+
+          socket.removeListener(
+            "close",
+            onClose
           );
 
         };
@@ -186,9 +262,44 @@ export class SMTPConnection {
 
         };
 
+        /*
+        A remote server can close the TCP connection cleanly (FIN,
+        no error) before we ever get a 'connect'/'error'/'timeout'
+        event — e.g. rejecting the connection outright. Without this
+        listener, 'close' fires but nothing is listening for it, so
+        this promise (and the caller awaiting it) hangs forever: the
+        socket handle is gone, so it stops keeping the event loop
+        alive, but the promise itself never settles.
+        */
+
+        const onClose = () => {
+
+          if (settled) {
+
+            return;
+
+          }
+
+          settled = true;
+
+          cleanup();
+
+          reject(
+            new Error(
+              "SMTP connection closed before connecting"
+            )
+          );
+
+        };
+
         socket.once(
           "connect",
           onConnect
+        );
+
+        socket.once(
+          "close",
+          onClose
         );
 
         socket.once(
@@ -342,6 +453,16 @@ export class SMTPConnection {
 
   async close(): Promise<void> {
 
+    if (this.hardDeadlineTimer) {
+
+      clearTimeout(
+        this.hardDeadlineTimer
+      );
+
+      this.hardDeadlineTimer = null;
+
+    }
+
     this.connected = false;
 
     this.busy = false;
@@ -384,7 +505,9 @@ export class SMTPConnection {
       `${command}\r\n`
     );
 
-    return this.readResponse();
+    const response = await this.readResponse();
+
+    return response;
 
   }
 
@@ -423,6 +546,11 @@ export class SMTPConnection {
           socket.removeListener(
             "timeout",
             onTimeout
+          );
+
+          socket.removeListener(
+            "close",
+            onClose
           );
 
         };
@@ -590,9 +718,44 @@ export class SMTPConnection {
 
         };
 
+        /*
+        A remote server can close the connection cleanly (FIN, no
+        error) mid-transaction instead of responding — e.g. after
+        rejecting an earlier command it may just hang up rather than
+        answering the next one. Without this listener, 'close' fires
+        but nothing reacts to it: the socket handle disappears (so it
+        stops keeping the event loop alive) while this promise stays
+        pending forever, hanging the caller indefinitely.
+        */
+
+        const onClose = () => {
+
+          if (settled) {
+
+            return;
+
+          }
+
+          settled = true;
+
+          cleanup();
+
+          reject(
+            new Error(
+              "SMTP connection closed before response"
+            )
+          );
+
+        };
+
         socket.on(
           "data",
           onData
+        );
+
+        socket.once(
+          "close",
+          onClose
         );
 
         socket.once(

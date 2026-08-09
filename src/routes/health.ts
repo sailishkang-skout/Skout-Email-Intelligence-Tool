@@ -6,6 +6,7 @@ import { pingDatabase } from "../database/database.js";
 import { pingRedis } from "../redis/redisClient.js";
 import { getQueueCounts } from "../queue/verificationQueue.js";
 import { pingStorage } from "../storage/storageProvider.js";
+import { extractErrorMessage } from "../utils/errorMessage.js";
 
 /*
 ==================================================
@@ -51,17 +52,34 @@ async function checkRedis(): Promise<HealthCheckResult> {
     : { status: "error", latencyMs: Date.now() - start, error: "Redis unreachable" };
 }
 
+// getQueueCounts() runs on BullMQ's Redis connection, which BullMQ
+// requires to be configured with maxRetriesPerRequest: null (retry
+// forever) so its own blocking commands work correctly - see
+// redisClient.ts. That means a Redis outage leaves the underlying
+// command retrying indefinitely, with no built-in bound of its own.
+// A health check must never hang, so this check gets its own
+// explicit deadline independent of BullMQ's retry policy.
+const QUEUE_CHECK_TIMEOUT_MS = 3_000;
+
 async function checkQueue(): Promise<HealthCheckResult> {
   const start = Date.now();
 
   try {
-    await getQueueCounts();
+    await Promise.race([
+      getQueueCounts(),
+      new Promise((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error("Queue status check timed out")),
+          QUEUE_CHECK_TIMEOUT_MS
+        )
+      ),
+    ]);
     return { status: "ok", latencyMs: Date.now() - start };
   } catch (error: unknown) {
     return {
       status: "error",
       latencyMs: Date.now() - start,
-      error: error instanceof Error ? error.message : String(error),
+      error: extractErrorMessage(error),
     };
   }
 }

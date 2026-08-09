@@ -75,16 +75,6 @@ export interface VerificationDecisionInput {
   confidenceScore:number;
 
 
-  confidenceStatus:
-    | "VERIFIED"
-    | "LIKELY_VALID"
-    | "UNCERTAIN"
-    | "LIKELY_INVALID"
-    | "INVALID"
-    | "CATCH_ALL"
-    | "TEMPORARY_FAILURE";
-
-
   /*
   Pattern intelligence
   */

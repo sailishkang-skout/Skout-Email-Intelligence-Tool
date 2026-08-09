@@ -17,7 +17,6 @@ function baseInput(
     catchAll: false,
     retryRequired: false,
     confidenceScore: 90,
-    confidenceStatus: "VERIFIED",
     ...overrides,
   };
 }

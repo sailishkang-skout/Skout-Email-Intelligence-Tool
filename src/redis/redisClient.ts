@@ -1,6 +1,7 @@
 import { Redis } from "ioredis";
 
 import { config } from "../config/config.js";
+import { extractErrorMessage } from "../utils/errorMessage.js";
 
 /*
 ==================================================
@@ -33,7 +34,7 @@ function createClient(): Redis {
   });
 
   instance.on("error", (error) => {
-    console.error("[Redis] Connection error:", error.message);
+    console.error("[Redis] Connection error:", extractErrorMessage(error));
   });
 
   instance.on("reconnecting", (delay: number) => {
@@ -83,7 +84,7 @@ export function getBullMQConnection(): Redis {
     });
 
     bullConnection.on("error", (error) => {
-      console.error("[Redis:BullMQ] Connection error:", error.message);
+      console.error("[Redis:BullMQ] Connection error:", extractErrorMessage(error));
     });
 
   }

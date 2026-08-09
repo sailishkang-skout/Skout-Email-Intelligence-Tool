@@ -4,6 +4,8 @@ import {
   PatternHistoryRepository
 } from "../repositories/patternHistoryRepository.js";
 
+import { extractErrorMessage } from "../utils/errorMessage.js";
+
 
 const repository =
   new PatternHistoryRepository();
@@ -288,10 +290,37 @@ export default async function patternRoutes(
 
 
 
-      const patterns =
-        repository.findByDomain(
-          cleanDomain
+      let patterns;
+
+      try {
+
+        patterns =
+          await repository.findByDomain(
+            cleanDomain
+          );
+
+      } catch (
+        error: unknown
+      ) {
+
+        request.log.error(
+          {
+            error: extractErrorMessage(error),
+
+            domain: cleanDomain,
+          },
+          "[PatternsRoute] Pattern history lookup failed"
         );
+
+        return reply
+          .code(500)
+          .send({
+            success: false,
+
+            error:
+              "Pattern history lookup failed",
+          });
+      }
 
 
 

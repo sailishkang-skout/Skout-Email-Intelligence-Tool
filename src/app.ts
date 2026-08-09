@@ -7,6 +7,7 @@ import rateLimit from "@fastify/rate-limit";
 
 import { config, LOG_REDACT_PATHS } from "./config/config.js";
 import { getRedis } from "./redis/redisClient.js";
+import { extractErrorMessage } from "./utils/errorMessage.js";
 
 import verifyRoutes from "./routes/verify.js";
 import verifyBatchRoutes from "./routes/verifyBatch.js";
@@ -74,6 +75,16 @@ max: config.rateLimit.max,
 timeWindow: config.rateLimit.windowMs,
 redis: getRedis(),
 nameSpace: "rate-limit:",
+// A Redis outage must not take down the entire API. Without this,
+// every request - including /health, whose whole purpose is to
+// report a Redis outage cleanly - fails with a raw ioredis error
+// because the rate-limit store itself can't be reached. Abuse
+// protection failing open during a Redis outage is the standard,
+// intended tradeoff: it is not a security boundary, and refusing
+// all traffic because the anti-abuse layer's own backing store
+// hiccuped would make Redis a single point of failure for the
+// whole service.
+skipOnError: true,
 });
 
 await app.register(verifyRoutes);
@@ -124,10 +135,7 @@ error.statusCode < 600
 
 return reply.code(statusCode).send({
 success: false,
-error:
-error instanceof Error
-? error.message
-: String(error),
+error: extractErrorMessage(error),
 });
 });
 

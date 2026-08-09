@@ -197,6 +197,78 @@ export interface VerificationStatusInput {
     | null;
 }
 
+export type VerificationErrorType =
+  | "DNS"
+  | "SMTP"
+  | "NONE"
+  | null;
+
+/*
+==================================================
+CLASSIFY ERROR TYPE
+==================================================
+
+Single source of truth for turning a raw verifier
+error string into the coarse DNS/SMTP/NONE bucket
+that this engine's rules key off of (errorType).
+
+Every caller that builds a VerificationStatusInput
+from raw verification evidence MUST classify its
+error through this function rather than re-deriving
+its own heuristic - a second, drifted copy of this
+logic previously caused the persisted verification
+status to disagree with the status returned by the
+API for the same event.
+==================================================
+*/
+
+export function classifyVerificationErrorType(
+  error: string | null | undefined
+): VerificationErrorType {
+  if (!error) {
+    return "NONE";
+  }
+
+  /*
+  DNS-related errors.
+  */
+
+  if (
+    /dns/i.test(error) ||
+    /mx/i.test(error) ||
+    /enotfound/i.test(error) ||
+    /getaddrinfo/i.test(error) ||
+    /nxdomain/i.test(error)
+  ) {
+    return "DNS";
+  }
+
+  /*
+  SMTP-related errors.
+  */
+
+  if (
+    /smtp/i.test(error) ||
+    /mailbox/i.test(error) ||
+    /recipient/i.test(error) ||
+    /connection/i.test(error) ||
+    /timeout/i.test(error)
+  ) {
+    return "SMTP";
+  }
+
+  /*
+  The canonical verification status layer only
+  understands DNS / SMTP / NONE.
+
+  Unknown transport errors are therefore classified
+  as SMTP-level verification failure while the
+  original error remains available separately.
+  */
+
+  return "SMTP";
+}
+
 /*
 ==================================================
 OUTPUT
