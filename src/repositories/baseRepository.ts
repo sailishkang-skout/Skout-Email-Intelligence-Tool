@@ -19,7 +19,7 @@ import {
  * helper methods below don't need to know which one
  * they're using.
  */
-type QueryExecutor = Pool | PoolClient;
+export type QueryExecutor = Pool | PoolClient;
 
 
 /**
@@ -76,6 +76,11 @@ export abstract class BaseRepository {
     const client =
       await this.db.connect();
 
+    // Set only if the transaction fails, so the finally block below
+    // can tell pg to destroy this connection (release(error)) rather
+    // than silently returning a possibly-corrupted one to the pool.
+    let releaseError: Error | undefined;
+
     try {
 
       await client.query("BEGIN");
@@ -89,13 +94,25 @@ export abstract class BaseRepository {
 
     } catch (error) {
 
-      await client.query("ROLLBACK");
+      releaseError =
+        error instanceof Error ? error : new Error(String(error));
+
+      // A rollback failure must never replace/mask the original
+      // error in what gets thrown - that's the one the caller needs
+      // to see. releaseError already guarantees this connection is
+      // destroyed instead of reused either way.
+      await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+        console.error(
+          "[BaseRepository] Rollback failed after a failed transaction:",
+          rollbackError
+        );
+      });
 
       throw error;
 
     } finally {
 
-      client.release();
+      client.release(releaseError);
 
     }
 

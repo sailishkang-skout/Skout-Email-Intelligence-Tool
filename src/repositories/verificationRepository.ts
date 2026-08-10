@@ -1,5 +1,6 @@
 import {
-  BaseRepository
+  BaseRepository,
+  type QueryExecutor
 } from "./baseRepository.js";
 
 
@@ -158,7 +159,8 @@ extends BaseRepository {
 
 
   async save(
-    input:CreateVerificationResultInput
+    input:CreateVerificationResultInput,
+    executor?:QueryExecutor
   ):Promise<void> {
 
     await this.executeRun(
@@ -238,7 +240,8 @@ DO UPDATE SET
         input.decision ?? null,
         input.recommendation ?? null,
         input.verificationStatus ?? null,
-      ]
+      ],
+      executor
     );
 
   }

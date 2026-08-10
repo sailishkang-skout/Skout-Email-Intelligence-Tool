@@ -89,6 +89,7 @@ import { extractErrorMessage } from "../utils/errorMessage.js";
 import {
   runIdempotent,
   IdempotencyInProgressError,
+  IdempotencyUnavailableError,
 } from "../redis/idempotency.js";
 
 import {
@@ -875,6 +876,46 @@ export default async function sendRoutes(
 
               error:
                 "A send for this verificationId is already in progress",
+            });
+
+        }
+
+        /*
+        The idempotency store itself (Redis) could not be reached to
+        even ESTABLISH a claim - critically, this is caught before
+        sendOutboundEmail() ever runs (see runIdempotent() in
+        idempotency.ts: it awaits the claim before calling the
+        operation), so no email has been sent. The correct response
+        here is a fast, truthful, fail-CLOSED rejection - never a
+        hang, and never proceeding without the safety guarantee this
+        route depends on.
+        */
+        if (
+          error instanceof IdempotencyUnavailableError
+        ) {
+
+          request.log.error(
+            {
+              error:
+                extractErrorMessage(error),
+
+              email,
+
+              verificationId:
+                verification.verificationId,
+            },
+            "[SendRoute] Idempotency check unavailable - refusing to send"
+          );
+
+          return reply
+            .code(503)
+            .send({
+              success: false,
+
+              email,
+
+              error:
+                "Cannot verify this send has not already occurred - safety check temporarily unavailable, no email was sent",
             });
 
         }

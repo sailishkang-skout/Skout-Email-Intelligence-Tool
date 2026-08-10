@@ -44,6 +44,16 @@ mock.module("../queue/verificationQueue.js", {
   }
 });
 
+mock.module("../services/verificationJobService.js", {
+  namedExports: {
+    getOutboxSummary: async () => ({
+      pending: { count: 0, oldestAgeMs: null },
+      dispatched: { count: 0, oldestAgeMs: null },
+      failed: { count: 0, oldestAgeMs: null },
+    })
+  }
+});
+
 const { default: healthRoutes } = await import("./health.js");
 
 test("GET /health does not hang when the queue check never settles (bounded, degraded response instead)", async () => {
@@ -75,6 +85,36 @@ test("GET /health does not hang when the queue check never settles (bounded, deg
   assert.equal(body.status, "degraded");
   assert.equal(body.checks.queue.status, "error");
   assert.match(body.checks.queue.error, /timed out/i);
+
+  await app.close();
+});
+
+test("GET /readiness does not hang when the queue check never settles either", async () => {
+  const app = Fastify({ logger: false });
+  await app.register(healthRoutes);
+
+  const start = Date.now();
+
+  const res = await Promise.race([
+    app.inject({ method: "GET", url: "/readiness" }),
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(
+        () => reject(new Error("TEST TIMEOUT: /readiness hung past 5s")),
+        5_000
+      )
+    )
+  ]);
+
+  assert.ok(Date.now() - start < 5_000);
+
+  const body = JSON.parse(res.body);
+
+  // Readiness is gated on Postgres only (mocked healthy above) - the
+  // queue check still runs and still reports its own timeout, but no
+  // longer determines ready/not_ready.
+  assert.equal(res.statusCode, 200);
+  assert.equal(body.status, "ready");
+  assert.equal(body.checks.queue.status, "error");
 
   await app.close();
 });

@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -w \"\\\\nHTTP_STATUS:%{http_code}\\\\n\" http://localhost:3001/readiness)",
+      "Bash(time curl -i -X POST http://localhost:3001/verify/batch/async -H 'Content-Type: application/json' -d '{\"emails\":[\"hardening-final-outage-test@example.com\"]}')",
+      "Bash(time curl -i -X POST http://localhost:3001/verify/batch/async -H 'Content-Type: application/json' -d '{\"emails\":[\"hardening-refix-outage-test@example.com\"]}')",
+      "Bash(grep -n \"fakeWorker\\(\\)\\\\|worker.emit\\\\|worker,$\\\\|startWorkerLivenessMonitor\\(worker\" src/queue/workerLivenessMonitor.test.ts)",
+      "Bash(sed -i '' 's/const worker = fakeWorker\\(\\);/const { worker, emitter } = fakeWorker\\(\\);/' src/queue/workerLivenessMonitor.test.ts)",
+      "Bash(sed -i '' 's/worker.emit\\(\"active\"\\);/emitter.emit\\(\"active\"\\);/' src/queue/workerLivenessMonitor.test.ts)",
+      "Bash(node --import tsx --experimental-test-module-mocks --test src/queue/workerLivenessMonitor.test.ts)",
+      "Bash(time curl -i -X POST http://localhost:3001/verify/batch/async -H 'Content-Type: application/json' -d '{\"emails\":[\"hardening-final-selfheal-test@example.com\"]}')",
+      "Bash(curl -s -X POST http://localhost:3001/verify/batch -H 'Content-Type: application/json' -d '{\"emails\":[\"docker-send-outage-setup@protonmail.com\"]}')",
+      "Bash(python3 -c \"import uuid; print\\(uuid.uuid4\\(\\)\\)\")",
+      "Bash(time curl -i -X POST http://localhost:3001/send -H 'Content-Type: application/json' -d '{\"email\":\"docker-send-outage-test@example.com\",\"verificationId\":\"6effa5bb-29f4-46ef-8663-f902beaa4720\",\"text\":\"real docker outage test - must not send\"}')",
+      "Bash(curl -s -X POST http://localhost:3001/send -H 'Content-Type: application/json' -d '{\"email\":\"docker-send-recovery-test@example.com\",\"verificationId\":\"__CMDSUB_OUTPUT__\",\"text\":\"post-recovery send should succeed\"}')",
+      "Bash(python3 -c \"import json; print\\(json.dumps\\(json.load\\(open\\('package.json'\\)\\)['scripts'], indent=2\\)\\)\")",
+      "Bash(grep -v \"console.error\\\\|console.log\\(\\\\`Verification queue worker\")",
+      "Bash(set -e)",
+      "Bash(node --import tsx --experimental-test-module-mocks --test src/services/emailVerificationOrchestratorTransaction.integration.test.ts)",
+      "Bash(echo \"ESLINT_EXIT:$?\")",
+      "Bash(echo \"UNIT_EXIT:$?\")"
+    ]
+  }
+}

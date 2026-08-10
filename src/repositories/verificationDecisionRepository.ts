@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import db from "../database/database.js";
+import type { QueryExecutor } from "./baseRepository.js";
 
 
 export interface VerificationDecisionInput {
@@ -53,8 +54,22 @@ export interface VerificationDecisionRecord {
 
 
 
+/*
+Uses ON CONFLICT (verification_id) DO UPDATE, matching the same
+upsert pattern verification_results already uses, rather than a
+plain INSERT. verifyEmail() (emailVerificationOrchestrator.ts) can
+be retried for the same logical item under an unchanged
+verificationId (BullMQ redelivery after a mid-sequence Postgres
+failure) - without this, a retry would hit this table's UNIQUE
+(verification_id) constraint and throw, even though the caller's
+intent is "persist the latest attempt's decision", not "reject a
+second attempt". RETURNING id/created_at ensures the response
+reflects the actual row (the original id/created_at on a conflict,
+not freshly-generated ones that were never written).
+*/
 export async function createVerificationDecision(
-    input: VerificationDecisionInput
+    input: VerificationDecisionInput,
+    executor: QueryExecutor = db
 ): Promise<VerificationDecisionRecord> {
 
 
@@ -64,7 +79,8 @@ export async function createVerificationDecision(
     const createdAt =
         new Date().toISOString();
 
-    await db.query(
+    const result =
+        await executor.query<{ id: string; created_at: string | Date }>(
         `
         INSERT INTO verification_decisions
         (
@@ -84,6 +100,16 @@ export async function createVerificationDecision(
         (
             $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11
         )
+        ON CONFLICT (verification_id)
+        DO UPDATE SET
+            decision = EXCLUDED.decision,
+            verification_status = EXCLUDED.verification_status,
+            confidence_score = EXCLUDED.confidence_score,
+            confidence_level = EXCLUDED.confidence_level,
+            reason_codes = EXCLUDED.reason_codes,
+            evidence_snapshot = EXCLUDED.evidence_snapshot,
+            engine_version = EXCLUDED.engine_version
+        RETURNING id, created_at
         `,
         [
             id,
@@ -100,9 +126,12 @@ export async function createVerificationDecision(
         ]
     );
 
+    const row = result.rows[0];
+
     return {
 
-        id,
+        id:
+            row?.id ?? id,
 
         verificationId:
             input.verificationId,
@@ -131,7 +160,10 @@ export async function createVerificationDecision(
         engineVersion:
             input.engineVersion,
 
-        createdAt
+        createdAt:
+            row?.created_at instanceof Date
+                ? row.created_at.toISOString()
+                : row?.created_at ?? createdAt
     };
 
 }

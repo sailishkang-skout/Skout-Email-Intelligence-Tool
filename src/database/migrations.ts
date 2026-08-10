@@ -32,6 +32,11 @@ export async function runMigrations(
 
   const client = await db.connect();
 
+  // Set only if something below fails, so the connection is
+  // destroyed (release(error)) rather than returned to the pool in a
+  // potentially-corrupted state.
+  let releaseError: Error | undefined;
+
   try {
 
     await client.query("SELECT pg_advisory_lock($1)", [MIGRATION_LOCK_KEY]);
@@ -85,7 +90,18 @@ export async function runMigrations(
 
       } catch (error) {
 
-        await client.query("ROLLBACK");
+        releaseError =
+          error instanceof Error ? error : new Error(String(error));
+
+        // A rollback failure must never replace the original
+        // migration error in what gets thrown.
+        await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+          console.error(
+            "[Migrations] Rollback failed after a failed migration:",
+            rollbackError
+          );
+        });
+
         throw error;
 
       }
@@ -94,10 +110,31 @@ export async function runMigrations(
 
     }
 
+  } catch (error) {
+
+    // Covers failures OUTSIDE the per-migration loop's own try/catch
+    // above (e.g. the advisory lock query itself, or listing/reading
+    // migration files) - those already-thrown errors would otherwise
+    // skip straight to `finally` below without ever marking this
+    // connection for destruction.
+    releaseError ??=
+      error instanceof Error ? error : new Error(String(error));
+
+    throw error;
+
   } finally {
 
-    await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]);
-    client.release();
+    // Skip the unlock query on an already-broken connection - it
+    // would only throw again and mask whatever is already being
+    // propagated. A dead connection's advisory lock is released
+    // automatically by Postgres when the session ends anyway.
+    if (!releaseError) {
+      await client.query("SELECT pg_advisory_unlock($1)", [MIGRATION_LOCK_KEY]).catch((unlockError: unknown) => {
+        console.error("[Migrations] Failed to release advisory lock:", unlockError);
+      });
+    }
+
+    client.release(releaseError);
 
   }
 

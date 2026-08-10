@@ -1,5 +1,6 @@
 import {
-  BaseRepository
+  BaseRepository,
+  type QueryExecutor
 } from "./baseRepository.js";
 
 
@@ -84,7 +85,8 @@ extends BaseRepository {
 
 
   async save(
-    input:CreateEvidenceInput
+    input:CreateEvidenceInput,
+    executor?:QueryExecutor
   ):Promise<void> {
 
     await this.executeRun(
@@ -119,7 +121,8 @@ VALUES
         input.metadata
           ? JSON.stringify(input.metadata)
           : null,
-      ]
+      ],
+      executor
     );
 
   }

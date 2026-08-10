@@ -25,6 +25,22 @@ multi-primary cluster, revisit this.
 Every lock has a mandatory expiration — there is no
 API for an unbounded lock, so a crashed holder can
 never wedge the resource forever.
+
+Not currently used by any route/service in this
+codebase (verified via a repo-wide grep during a
+2026-08 production-hardening audit) - only its own
+integration test exercises it. Uses the main, patient
+getRedis() connection, which is correct for this
+module's OWN documented use case (infrequent
+maintenance-task coordination, not a hot request
+path) - but if a future caller ever awaits acquire()
+synchronously inside an HTTP request path, revisit
+that choice the same way idempotency.ts's own
+dedicated fail-fast connection was added: a patient
+multi-second wait for a lock is exactly the kind of
+unbounded-hang risk this project has repeatedly found
+and fixed elsewhere (POST /verify/batch/async, POST
+/send).
 ==================================================
 */
 

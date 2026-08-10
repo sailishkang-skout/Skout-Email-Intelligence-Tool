@@ -97,6 +97,26 @@ services:
       DATABASE_SSL: "false"
       REDIS_URL: redis://redis:6379
     command: ["node", "dist/worker.js"]
+    # The image's default HEALTHCHECK (inherited from the Dockerfile)
+    # probes the API's HTTP /liveness endpoint - correct for `api`,
+    # meaningless here since the worker runs no HTTP server at all by
+    # design (it's a lean BullMQ consumer, and adding a port purely to
+    # satisfy a healthcheck would be unnecessary infrastructure). This
+    # override replaces it with a check against the file-based
+    # readiness heartbeat the worker process itself maintains only
+    # while its BullMQ Worker is running/unpaused and its Redis
+    # connection is genuinely "ready" (see src/queue/workerHeartbeat.ts).
+    healthcheck:
+      test: [
+        "CMD",
+        "node",
+        "-e",
+        "const fs=require('fs');try{const s=fs.statSync('/tmp/worker-health/ready');process.exit((Date.now()-s.mtimeMs)<20000?0:1)}catch(e){process.exit(1)}"
+      ]
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
 volumes:
   postgres_data:

@@ -6,7 +6,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 
 import { config, LOG_REDACT_PATHS } from "./config/config.js";
-import { getRedis } from "./redis/redisClient.js";
+import { getRateLimitRedisConnection } from "./redis/redisClient.js";
 import { extractErrorMessage } from "./utils/errorMessage.js";
 
 import verifyRoutes from "./routes/verify.js";
@@ -73,7 +73,15 @@ await app.register(helmet);
 await app.register(rateLimit, {
 max: config.rateLimit.max,
 timeWindow: config.rateLimit.windowMs,
-redis: getRedis(),
+// A dedicated, fast-failing connection - not the main shared
+// client. skipOnError below only controls what happens AFTER the
+// store read fails; it does not make that failure happen any
+// faster. Sharing the main client's patient ~10s connectTimeout
+// (correct for business-critical Redis usage like BullMQ) meant
+// EVERY request, even ones touching no other infrastructure,
+// took 10+ extra seconds during a Redis outage. See
+// getRateLimitRedisConnection() for the full story.
+redis: getRateLimitRedisConnection(),
 nameSpace: "rate-limit:",
 // A Redis outage must not take down the entire API. Without this,
 // every request - including /health, whose whole purpose is to

@@ -1,4 +1,4 @@
-import { getRedis, getBullMQConnection } from "../redis/redisClient.js";
+import { getRedis, getBullMQConnection, getBullMQWorkerConnection } from "../redis/redisClient.js";
 import { getDatabase } from "../database/database.js";
 import { pingStorage } from "../storage/storageProvider.js";
 import { config } from "../config/config.js";
@@ -69,6 +69,7 @@ export async function requireRedis(timeoutMs = 3000): Promise<void> {
     // failed deterministically.
     getRedis().disconnect();
     getBullMQConnection().disconnect();
+    getBullMQWorkerConnection().disconnect();
 
     throw new InfraUnavailableError(
       `Redis is not reachable at ${config.redis.url} ` +

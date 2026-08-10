@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 
+import { getDatabase } from "../database/database.js";
+
 import { getMX } from "./dnsCache.js";
 import { verifySMTP } from "./smtpChecker.js";
 import { checkCatchAll } from "./catchAllChecker.js";
@@ -583,6 +585,18 @@ export async function verifyEmail(
 
     pattern?:string|null;
 
+    /*
+    Overrides the auto-generated verificationId. Callers that sit
+    behind an at-least-once retry mechanism (the async verification
+    worker - see verificationQueueWorker.ts) pass their own stable id
+    (the job item's id) so a redelivered/retried attempt for the same
+    logical item reuses the same verificationId instead of minting a
+    fresh one on every attempt - required for the upsert-based
+    idempotency below to actually dedupe retries rather than create a
+    new row per attempt.
+    */
+    verificationId?:string|null;
+
   }
 
 ):Promise<VerifyEmailResult> {
@@ -620,7 +634,7 @@ const requestId =
   options?.requestId ?? null;
 
 const verificationId =
-  randomUUID();
+  options?.verificationId ?? randomUUID();
 
 await verificationEventRepository.createEvent({
 
@@ -1091,13 +1105,25 @@ EVIDENCE WEIGHTING ENGINE
 
 
 
+/*
+Uses `pattern` (the pattern this specific email was generated from /
+verified under - e.g. email discovery passes candidate.pattern; see
+options.pattern above), NOT patternIntelligence.bestPattern - that is
+the domain's current highest-ranked HISTORICAL pattern, unrelated to
+whichever pattern this particular email actually represents. Using
+bestPattern here would attribute this verification's real outcome to
+the wrong pattern whenever the two differ (the common case once a
+domain has any history at all), silently poisoning the pattern that
+happened to rank highest before this observation while the pattern
+actually under test gets no learning credit.
+*/
 const patternEvidence =
   await evaluatePatternEvidence({
 
     email,
 
     pattern:
-      patternIntelligence.bestPattern?.pattern ?? "UNKNOWN",
+      pattern ?? "UNKNOWN",
 
     smtpValid:
       smtp.smtpValid,
@@ -1302,145 +1328,212 @@ await verificationEventRepository.createEvent({
   });
 
 
-  await verificationRepository.save({
+  /*
+  ==================================================
+  ATOMIC RESULT + DECISION PERSISTENCE
+  ==================================================
 
-  verificationId,
+  verification_results and verification_decisions are FK-linked
+  (verification_decisions.verification_id references
+  verification_results.verification_id) and neither write tolerates
+  failure the way the evidence/audit-trail writes below do. Without a
+  shared transaction, a failure between the two calls (a dropped
+  connection, a transient Postgres error) used to leave a committed
+  verification_results row with no matching decision - permanently
+  orphaned, since verificationId used to be freshly generated on
+  every call. Combined with the async worker's retry path (BullMQ
+  attempts: 3 - see verificationQueue.ts), that failure would then
+  trigger a second, real SMTP verification for the same item on
+  redelivery.
 
-  requestId,
+  Both writes now run on one checked-out client inside BEGIN/COMMIT/
+  ROLLBACK (the same idiom verificationJobService.ts already uses for
+  its multi-table job/item/outbox writes), and both use ON CONFLICT
+  (verification_id) upserts (see verificationRepository.save and
+  createVerificationDecision), so a retry that reuses the same
+  verificationId (the async worker now passes its stable itemId - see
+  processVerificationJob in verificationQueueWorker.ts) safely
+  converges on one row per table instead of erroring or duplicating.
+  */
 
-  email,
+  const persistenceClient =
+    await getDatabase().connect();
 
-  domain,
+  // Set only when the transaction fails, so client.release() below
+  // can tell pg to destroy this connection instead of returning a
+  // possibly-corrupted one to the pool for the next caller to reuse.
+  let persistenceReleaseError: Error | undefined;
 
-  pattern,
+  try {
 
-  provider:
-    smtp.provider,
+    await persistenceClient.query("BEGIN");
 
-  responseCode:
-    smtp.responseCode,
+    await verificationRepository.save({
 
-  responseMessage:
-    smtp.responseMessage,
+      verificationId,
 
-  smtpValid:
-    smtp.smtpValid,
+      requestId,
 
-  mailboxExists:
-    smtp.mailboxExists,
+      email,
 
-  mxAvailable:
-    smtp.mxAvailable,
+      domain,
 
-  catchAll,
+      pattern,
 
-  retryRequired:
-    smtp.retryRequired,
+      provider:
+        smtp.provider,
 
-  retryReason:
-    smtp.retryReason ?? null,
+      responseCode:
+        smtp.responseCode,
 
-  confidenceScore:
-    confidence.score,
+      responseMessage:
+        smtp.responseMessage,
 
-  confidenceLevel:
-    confidence.level,
+      smtpValid:
+        smtp.smtpValid,
 
-  decision:
-    decision.decision,
+      mailboxExists:
+        smtp.mailboxExists,
 
-  recommendation:
-    recommendation.recommendation,
+      mxAvailable:
+        smtp.mxAvailable,
 
-  verificationStatus:
-    verificationStatus.status
+      catchAll,
 
-});
+      retryRequired:
+        smtp.retryRequired,
 
-await createVerificationDecision({
+      retryReason:
+        smtp.retryReason ?? null,
 
-    verificationId,
-
-    email,
-
-    decision:
-        decision.decision,
-
-    verificationStatus:
-        verificationStatus.status,
-
-    confidenceScore:
+      confidenceScore:
         confidence.score,
 
-    confidenceLevel:
+      confidenceLevel:
         confidence.level,
 
+      decision:
+        decision.decision,
 
-    reasonCodes:
-        [
+      recommendation:
+        recommendation.recommendation,
+
+      verificationStatus:
+        verificationStatus.status
+
+    }, persistenceClient);
+
+    await createVerificationDecision({
+
+        verificationId,
+
+        email,
+
+        decision:
             decision.decision,
-            verificationStatus.status
-        ],
 
+        verificationStatus:
+            verificationStatus.status,
 
-    evidenceSnapshot: {
-
-    smtp: {
-
-        responseCode:
-            smtp.responseCode,
-
-        mailboxExists:
-            smtp.mailboxExists,
-
-        smtpValid:
-            smtp.smtpValid,
-
-        mxAvailable:
-            smtp.mxAvailable,
-
-        provider:
-            smtp.provider,
-
-        retryRequired:
-            smtp.retryRequired
-
-    },
-
-
-    catchAll,
-
-
-    confidence: {
-
-        score:
+        confidenceScore:
             confidence.score,
 
-        level:
+        confidenceLevel:
             confidence.level,
 
-        status:
-            confidence.status ?? null
-    },
+
+        reasonCodes:
+            [
+                decision.decision,
+                verificationStatus.status
+            ],
 
 
-    patternIntelligence: {
+        evidenceSnapshot: {
 
-        bestPattern:
-            patternIntelligence.bestPattern ?? null
+        smtp: {
 
-    },
+            responseCode:
+                smtp.responseCode,
+
+            mailboxExists:
+                smtp.mailboxExists,
+
+            smtpValid:
+                smtp.smtpValid,
+
+            mxAvailable:
+                smtp.mxAvailable,
+
+            provider:
+                smtp.provider,
+
+            retryRequired:
+                smtp.retryRequired
+
+        },
 
 
-        verificationStatus
-
-    },
+        catchAll,
 
 
-    engineVersion:
-        "verification-engine-v1"
+        confidence: {
 
-});
+            score:
+                confidence.score,
+
+            level:
+                confidence.level,
+
+            status:
+                confidence.status ?? null
+        },
+
+
+        patternIntelligence: {
+
+            bestPattern:
+                patternIntelligence.bestPattern ?? null
+
+        },
+
+
+            verificationStatus
+
+        },
+
+
+        engineVersion:
+            "verification-engine-v1"
+
+    }, persistenceClient);
+
+    await persistenceClient.query("COMMIT");
+
+  } catch (error) {
+
+    persistenceReleaseError =
+      error instanceof Error ? error : new Error(String(error));
+
+    // A rollback failure must never replace/mask the original error
+    // in what gets thrown - that's the one the caller (and the retry
+    // path above it) needs to see. persistenceReleaseError already
+    // guarantees this connection is destroyed instead of reused
+    // either way.
+    await persistenceClient.query("ROLLBACK").catch((rollbackError: unknown) => {
+      console.error(
+        "[EmailVerificationOrchestrator] Rollback failed after a failed result/decision transaction:",
+        rollbackError
+      );
+    });
+
+    throw error;
+
+  } finally {
+
+    persistenceClient.release(persistenceReleaseError);
+
+  }
 
 /*
 ==================================================
@@ -1726,19 +1819,29 @@ await verificationEventRepository.createEvent({
       smtp.retryRequired,
 
 
+    /*
+    This top-level field (distinct from smtp.retryReason on the
+    nested smtp object) used to be hardcoded null - callers that read
+    it directly (see routes/verify.ts, which builds its own response
+    from result.retryReason, not result.smtp.retryReason) always saw
+    null even when a genuine retry reason existed.
+    */
     retryReason:
-        null,
+        smtp.retryReason,
 
 
     patternEvidence:{
 
-      evaluated:false,
+      evaluated:true,
 
-      recorded:false,
+      recorded:
+        patternEvidence.recorded,
 
-      outcome:null,
+      outcome:
+        patternEvidence.outcome,
 
-      reasonCode:null
+      reasonCode:
+        patternEvidence.reasonCode
 
     },
 

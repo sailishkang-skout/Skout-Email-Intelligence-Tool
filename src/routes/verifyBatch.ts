@@ -5,12 +5,9 @@ import { verifyBatch } from "../services/batchVerification.js";
 import {
   createVerificationJob,
   getVerificationJob,
-  markJobRunning,
   listVerificationJobItems,
   type VerificationJob,
 } from "../services/verificationJobService.js";
-
-import { enqueueVerificationItem } from "../queue/verificationQueue.js";
 
 import { config } from "../config/config.js";
 
@@ -146,12 +143,21 @@ export default async function verifyBatchRoutes(
   POST /verify/batch/async — durable/queued
   ==================================================
 
-  Creates a durable job record, enqueues one queue
-  job per email, and returns immediately. Use
-  GET /verify/jobs/:jobId to poll progress. Prefer
-  this over the synchronous endpoint for large
-  batches or when the caller shouldn't hold an HTTP
-  connection open for the full verification run.
+  Creates a durable job record and returns as soon as
+  that Postgres transaction commits - it does NOT wait
+  on, or depend on, Redis/BullMQ being reachable. Each
+  item is written together with a transactional outbox
+  row in the same commit (see createVerificationJob),
+  which a separate background dispatcher (see
+  src/queue/outboxDispatcher.ts, started from
+  src/worker.ts) polls and enqueues into BullMQ,
+  retrying with backoff if Redis is down. The response
+  here is therefore always truthful about what actually
+  happened ("durably accepted"), never a false failure
+  caused by a downstream dependency that hasn't been
+  touched yet - use GET /verify/jobs/:jobId to observe
+  real progress from PENDING through to
+  COMPLETED/FAILED.
   ==================================================
   */
 
@@ -184,30 +190,12 @@ export default async function verifyBatchRoutes(
         });
       }
 
-      let job: VerificationJob | undefined;
+      let job: VerificationJob;
 
       try {
 
         job =
           await createVerificationJob(emails);
-
-        const jobId =
-          job.jobId;
-
-        const items =
-          await listVerificationJobItems(jobId);
-
-        await Promise.all(
-          items.map(item =>
-            enqueueVerificationItem({
-              itemId: item.id,
-              jobId,
-              email: item.email,
-            })
-          )
-        );
-
-        await markJobRunning(jobId);
 
       } catch (
         error: unknown
@@ -216,10 +204,8 @@ export default async function verifyBatchRoutes(
         request.log.error(
           {
             error: extractErrorMessage(error),
-
-            jobId: job?.jobId ?? null,
           },
-          "[VerifyBatchRoute] Async batch job creation failed"
+          "[VerifyBatchRoute] Failed to create verification job"
         );
 
         return reply
@@ -240,7 +226,7 @@ export default async function verifyBatchRoutes(
 
         total: job.total,
 
-        status: "RUNNING",
+        status: job.status,
 
         statusUrl: `/verify/jobs/${job.jobId}`,
 
