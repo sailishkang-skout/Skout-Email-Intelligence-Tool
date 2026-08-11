@@ -125,10 +125,42 @@ log these values, even at debug level.
 
 const SECRET_ENV_KEYS = [
   "DATABASE_URL",
+  "DATABASE_PASSWORD",
   "REDIS_URL",
   "STORAGE_SECRET_ACCESS_KEY",
   "STORAGE_ACCESS_KEY_ID",
 ];
+
+/*
+==================================================
+DATABASE_URL FROM SPLIT VARS
+==================================================
+
+Some deployment environments (ECS task definitions
+sourcing the password from Secrets Manager) inject
+DATABASE_HOST/PORT/NAME/USER as plain env vars and
+DATABASE_PASSWORD as a separately-resolved secret,
+rather than a single pre-assembled connection string.
+DATABASE_URL remains the primary/preferred source
+(this is what docker-compose.yml and local dev set
+directly) — this only fires when it's absent and all
+five split vars are present.
+==================================================
+*/
+
+function databaseUrlFromEnv(): string | undefined {
+  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
+
+  const host = process.env.DATABASE_HOST;
+  const port = process.env.DATABASE_PORT;
+  const name = process.env.DATABASE_NAME;
+  const user = process.env.DATABASE_USER;
+  const password = process.env.DATABASE_PASSWORD;
+
+  if (!host || !port || !name || !user || !password) return undefined;
+
+  return `postgres://${encodeURIComponent(user)}:${encodeURIComponent(password)}@${host}:${port}/${name}`;
+}
 
 /*
 ==================================================
@@ -148,7 +180,7 @@ function loadConfig(): AppConfig {
 
     database: {
       url:
-        process.env.DATABASE_URL ??
+        databaseUrlFromEnv() ??
         // Sensible local default matching docker-compose.yml so
         // `npm run dev` works out of the box after `docker compose up`.
         (!isProduction
