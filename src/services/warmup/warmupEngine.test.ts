@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
 import { warmupStatus } from "./warmupEngine.js";
 
-describe("warmup scaffold", () => {
-  it("is disabled until the engine is implemented", () => {
-    expect(warmupStatus()).toEqual({ enabled: false, phase: "scaffold" });
-  });
+test("warmup scaffold: is disabled until the engine is implemented", () => {
+  assert.deepEqual(warmupStatus(), { enabled: false, phase: "scaffold" });
 });
