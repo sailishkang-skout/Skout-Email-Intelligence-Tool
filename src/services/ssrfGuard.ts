@@ -29,9 +29,28 @@ itself — callers connect to the IP this returns.
 */
 
 export class SsrfBlockedError extends Error {
+  /*
+  Raw reason string, kept separate from the combined `.message` so
+  callers that need to classify the failure (e.g. distinguishing a
+  DNS resolution failure from a private-address policy block, for
+  SMTP transport-error classification) don't have to regex-parse
+  the human-readable message.
+  */
+  public readonly reason: string;
+
+  /*
+  True when this block originated from DNS resolution itself
+  failing (NXDOMAIN, timeout, etc.), as opposed to a successful
+  resolution landing on a private/reserved address. The two are
+  different failure classes for retry/observability purposes.
+  */
+  public readonly isDnsFailure: boolean;
+
   constructor(host: string, reason: string) {
     super(`Refusing to connect to ${host}: ${reason}`);
     this.name = "SsrfBlockedError";
+    this.reason = reason;
+    this.isDnsFailure = reason.startsWith("DNS resolution failed");
   }
 }
 
@@ -87,25 +106,46 @@ function isPrivateAddress(ip: string): boolean {
   return true; // fail closed for anything we don't recognize
 }
 
+export interface ResolvedAddress {
+  address: string;
+  family: 4 | 6;
+}
+
 /**
- * Resolves `hostname` to a concrete IP address and verifies it is a
- * public, routable address. Returns the resolved IP — callers must
- * connect to that IP (not the original hostname) to avoid DNS
- * rebinding between this check and the actual connection.
+ * Resolves `hostname` to EVERY concrete address it currently answers
+ * with (both A and AAAA when available), independently validates
+ * each one against the exact same public/private classification
+ * `resolvePublicAddress` uses, drops any that are private/loopback/
+ * link-local/reserved, and de-duplicates. Callers must connect to
+ * one of the returned addresses directly (never the original
+ * hostname) to avoid DNS rebinding between this check and the
+ * actual connection — each address in the returned list has already
+ * passed SSRF validation individually, so any of them is safe to
+ * connect to.
  *
- * Throws SsrfBlockedError if the host resolves to a private,
- * loopback, link-local, or otherwise reserved address.
+ * Throws SsrfBlockedError if DNS resolution itself fails, or if
+ * every candidate address DNS returned is private/reserved (i.e.
+ * there is nothing safe left to connect to).
  */
-export async function resolvePublicAddress(
-  hostname: string
-): Promise<string> {
+export async function resolvePublicAddresses(
+  hostname: string,
+  options?: {
+    /*
+    4 = IPv4 only, 6 = IPv6 only, 0/undefined = either family.
+    Lets callers honor an operator's address-family preference
+    (SMTP_ALLOW_IPV4/SMTP_ALLOW_IPV6 - see config.ts) instead of
+    always taking every family the resolver returns.
+    */
+    family?: 0 | 4 | 6;
+  }
+): Promise<ResolvedAddress[]> {
   const trimmed = hostname.trim();
 
   if (!trimmed) {
     throw new SsrfBlockedError(hostname, "empty host");
   }
 
-  // Already a literal IP address.
+  // Already a literal IP address - a single-candidate "resolution".
   if (net.isIP(trimmed)) {
     if (isPrivateAddress(trimmed)) {
       throw new SsrfBlockedError(
@@ -114,14 +154,29 @@ export async function resolvePublicAddress(
       );
     }
 
-    return trimmed;
+    return [
+      {
+        address: trimmed,
+        family: net.isIPv4(trimmed) ? 4 : 6,
+      },
+    ];
   }
 
-  let resolved: string;
+  let results: { address: string; family: number }[];
 
   try {
-    const result = await dns.lookup(trimmed);
-    resolved = result.address;
+    /*
+    all: true - return every answer, not just one. verbatim: true -
+    return them in the order the resolver gave them (no implicit
+    IPv4-first reordering), since this function's whole purpose is
+    to hand every real candidate to the caller and let ITS ordering
+    policy decide, not have that decision silently made here.
+    */
+    results = await dns.lookup(trimmed, {
+      all: true,
+      verbatim: true,
+      family: options?.family ?? 0,
+    });
   } catch (error) {
     throw new SsrfBlockedError(
       trimmed,
@@ -131,12 +186,59 @@ export async function resolvePublicAddress(
     );
   }
 
-  if (isPrivateAddress(resolved)) {
+  const seen = new Set<string>();
+  const validated: ResolvedAddress[] = [];
+
+  for (const result of results) {
+    const address = result.address;
+
+    // De-duplicate - a resolver can legitimately return the same
+    // address twice (e.g. once per nameserver response merged).
+    if (seen.has(address)) {
+      continue;
+    }
+    seen.add(address);
+
+    /*
+    Every DNS answer is validated independently and dropped (not
+    thrown on) if private/reserved - a malicious or misconfigured
+    domain could mix a legitimate public MX with an internal
+    decoy address; the fix is to never connect to the bad one, not
+    to refuse the whole hostname when a good candidate also exists.
+    */
+    if (isPrivateAddress(address)) {
+      continue;
+    }
+
+    validated.push({
+      address,
+      family: net.isIPv4(address) ? 4 : 6,
+    });
+  }
+
+  if (validated.length === 0) {
     throw new SsrfBlockedError(
       trimmed,
-      `resolved to private/reserved address ${resolved}`
+      `no public/routable address found (DNS returned ${results.length} candidate(s), none usable)`
     );
   }
 
-  return resolved;
+  return validated;
+}
+
+/**
+ * Resolves `hostname` to a single concrete, validated public IP
+ * address. Thin compatibility wrapper around
+ * `resolvePublicAddresses` (the first validated candidate) for
+ * callers that only ever need/want one address - see that function
+ * for the full validation contract. Throws SsrfBlockedError under
+ * the exact same conditions.
+ */
+export async function resolvePublicAddress(
+  hostname: string,
+  options?: { family?: 0 | 4 | 6 }
+): Promise<string> {
+  const addresses = await resolvePublicAddresses(hostname, options);
+
+  return addresses[0].address;
 }

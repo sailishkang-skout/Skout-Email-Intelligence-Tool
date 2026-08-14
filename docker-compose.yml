@@ -122,3 +122,30 @@ volumes:
   postgres_data:
   redis_data:
   minio_data:
+
+networks:
+  default:
+    # Compose's implicit default network has IPv6 disabled, which means
+    # containers have no IPv6 route at all - not "IPv6 disabled by
+    # policy", just genuinely no AAAA-capable route out. On networks
+    # where outbound IPv4 SMTP (TCP/25) is restricted but IPv6 is not
+    # (a real, observed split - see docs/smtp-connectivity.md), that
+    # silently forces every SMTP connection attempt onto the blocked
+    # path. This makes IPv6 available to every service on this network;
+    # it does not force IPv6 use anywhere (Node/the OS resolver still
+    # picks whichever family it prefers unless SMTP_ALLOW_IPV4/
+    # SMTP_ALLOW_IPV6 are set - see config.ts).
+    enable_ipv6: true
+    ipam:
+      config:
+        # Pinned explicitly (was previously auto-assigned by Compose)
+        # so recreating the network doesn't hand out a different IPv4
+        # range than before.
+        - subnet: 172.19.0.0/16
+          gateway: 172.19.0.1
+        # Private ULA range (RFC 4193) - not globally routable, safe
+        # for a Compose bridge network. Docker NATs container IPv6
+        # addresses the same way it already NATs IPv4 for outbound
+        # connectivity.
+        - subnet: fd42:19:19::/64
+          gateway: fd42:19:19::1
