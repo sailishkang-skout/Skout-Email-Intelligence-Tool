@@ -95,6 +95,24 @@ nameSpace: "rate-limit:",
 skipOnError: true,
 });
 
+const PUBLIC_PATHS = new Set(["/", "/health", "/liveness", "/readiness", "/metrics"]);
+
+app.addHook("onRequest", async (request, reply) => {
+	if (!config.apiKey) return;
+	if (request.method === "OPTIONS") return;
+	const path = request.url.split("?")[0] ?? "";
+	if (PUBLIC_PATHS.has(path)) return;
+	const provided =
+		(typeof request.headers["x-api-key"] === "string" ? request.headers["x-api-key"] : "") ||
+		(typeof request.headers.authorization === "string" &&
+		request.headers.authorization.startsWith("Bearer ")
+			? request.headers.authorization.slice(7)
+			: "");
+	if (!provided || provided !== config.apiKey) {
+		return reply.code(401).send({ success: false, error: "invalid_or_missing_api_key" });
+	}
+});
+
 await app.register(verifyRoutes);
 await app.register(verifyBatchRoutes);
 

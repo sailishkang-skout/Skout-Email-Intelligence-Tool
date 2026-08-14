@@ -97,6 +97,9 @@ const ConfigSchema = z.object({
     windowMs: z.coerce.number().int().positive().default(60_000),
   }),
 
+  /** When set, mutating routes require `x-api-key` (n8n / external tools). Health stays public. */
+  apiKey: z.string().optional(),
+
   verification: z.object({
     ttlDays: z.coerce.number().int().positive().default(30),
     retryQueueConcurrency: z.coerce.number().int().positive().default(10),
@@ -219,6 +222,8 @@ function loadConfig(): AppConfig {
       max: process.env.RATE_LIMIT_MAX,
       windowMs: process.env.RATE_LIMIT_WINDOW_MS,
     },
+
+    apiKey: process.env.API_KEY || process.env.EMAIL_INTEL_API_KEY || undefined,
 
     verification: {
       ttlDays: process.env.VERIFICATION_TTL_DAYS,
