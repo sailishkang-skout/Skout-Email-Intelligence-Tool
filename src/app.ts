@@ -20,6 +20,7 @@ import emailDiscoveryRoutes from "./routes/emailDiscovery.js";
 import cacheRoutes from "./routes/cache.js";
 import evidenceLedgerRoutes from "./routes/evidenceLedger.js";
 import healthRoutes from "./routes/health.js";
+import warmupRoutes from "./routes/warmup.js";
 import metricsRoutes from "./observability/metricsRoute.js";
 
 const app = Fastify({
@@ -127,6 +128,7 @@ await app.register(emailDiscoveryRoutes);
 await app.register(cacheRoutes);
 await app.register(evidenceLedgerRoutes);
 await app.register(healthRoutes);
+await app.register(warmupRoutes);
 await app.register(metricsRoutes);
 
 app.get("/", async () => {
