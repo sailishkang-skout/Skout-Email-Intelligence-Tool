@@ -234,9 +234,9 @@ function normalizeSMTPResult(
 
 
     mailboxExists:
-      typeof value.mailboxExists === "boolean"
-        ? value.mailboxExists
-        : false,
+      typeof value.mailboxExists === "boolean" || value.mailboxExists === null
+        ? value.mailboxExists as boolean | null
+        : null,
 
 
     smtpValid:
@@ -370,7 +370,7 @@ function buildRecommendation(
   input:{
     score:number;
 
-    mailboxExists:boolean;
+    mailboxExists:boolean|null;
 
     smtpValid:boolean;
 
@@ -444,8 +444,11 @@ function buildRecommendation(
   */
 
   if(
-    !input.mailboxExists &&
-    !input.smtpValid
+    input.mailboxExists === false &&
+    !input.smtpValid &&
+    input.responseCode !== null &&
+    input.responseCode >= 500 &&
+    input.responseCode < 600
   ){
 
     return {
@@ -473,7 +476,7 @@ function buildRecommendation(
 
  if (
   input.smtpValid &&
-  input.mailboxExists &&
+  input.mailboxExists === true &&
   input.score >= 80
 ) {
 
@@ -503,7 +506,7 @@ function buildRecommendation(
 
   if (
   input.smtpValid &&
-  input.mailboxExists &&
+  input.mailboxExists === true &&
   input.score >= 60
 ) {
 

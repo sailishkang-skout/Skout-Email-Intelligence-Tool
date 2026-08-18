@@ -3,7 +3,7 @@ import { smtpPool } from "./smtpPool.js";
 export interface SMTPVerificationResult {
   success: boolean;
   smtpValid: boolean;
-  mailboxExists: boolean;
+  mailboxExists: boolean | null;
   responseCode: number | null;
   responseMessage: string;
   transcript: string[];
@@ -30,7 +30,7 @@ export async function verifySMTP(
     return {
       success: false,
       smtpValid: false,
-      mailboxExists: false,
+      mailboxExists: null,
       responseCode: null,
       responseMessage: "Email is required",
       transcript: [
@@ -47,7 +47,7 @@ export async function verifySMTP(
     return {
       success: false,
       smtpValid: false,
-      mailboxExists: false,
+      mailboxExists: null,
       responseCode: null,
       responseMessage: "MX host is required",
       transcript: [
@@ -78,7 +78,15 @@ export async function verifySMTP(
         : "";
 
     const mailboxExists =
-      responseCode === 250;
+      responseCode === 250
+        ? true
+        : (
+            responseCode !== null &&
+            responseCode >= 500 &&
+            responseCode < 600
+          )
+            ? false
+            : null;
 
     const smtpValid =
       responseCode !== null &&
@@ -109,7 +117,7 @@ export async function verifySMTP(
     return {
       success: false,
       smtpValid: false,
-      mailboxExists: false,
+      mailboxExists: null,
       responseCode: null,
       responseMessage: message,
       transcript: [

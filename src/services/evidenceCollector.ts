@@ -55,7 +55,7 @@ export interface EvidencePacket {
 
     responseMessage:string|null;
 
-    mailboxExists:boolean;
+    mailboxExists:boolean|null;
 
     smtpValid:boolean;
 
@@ -103,7 +103,7 @@ export interface EvidenceCollectorSMTPInput {
 
   responseMessage:string|null;
 
-  mailboxExists:boolean;
+  mailboxExists:boolean|null;
 
   smtpValid:boolean;
 
@@ -180,7 +180,7 @@ export function collectVerificationEvidence(
       "SMTP",
 
     outcome:
-      input.smtp.mailboxExists
+      input.smtp.mailboxExists === true
         ? "SUCCESS"
         : "FAILURE",
 
@@ -219,7 +219,7 @@ export function collectVerificationEvidence(
   */
 
 
-  if(input.smtp.mailboxExists){
+  if(input.smtp.mailboxExists === true){
 
     signals.push({
 

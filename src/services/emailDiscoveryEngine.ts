@@ -89,7 +89,7 @@ export interface EmailDiscoveryVerification {
 
   responseCode: number | null;
 
-  mailboxExists: boolean;
+  mailboxExists: boolean | null;
 
   smtpValid: boolean;
 

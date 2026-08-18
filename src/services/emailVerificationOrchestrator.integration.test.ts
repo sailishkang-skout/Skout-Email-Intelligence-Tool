@@ -73,6 +73,10 @@ test("emailVerificationOrchestrator: a mid-transaction SMTP failure persists the
   );
 
   assert.equal(result.verificationStatus.status, "SMTP_ERROR");
+  assert.equal(result.intelligence.decision.decision, "MANUAL_REVIEW");
+  assert.equal(result.intelligence.recommendation.action, "MANUAL_REVIEW");
+  assert.equal(result.intelligence.recommendation.reason, "Evidence is inconclusive.");
+  assert.equal(result.intelligence.evidenceWeights.strongestNegative?.type ?? null, null);
 
   const verificationRepository = new VerificationRepository();
 

@@ -61,7 +61,7 @@ export interface EvidenceAnalysisInput {
 
   smtpValid:boolean;
 
-  mailboxExists:boolean;
+  mailboxExists:boolean|null;
 
   catchAll:boolean;
 

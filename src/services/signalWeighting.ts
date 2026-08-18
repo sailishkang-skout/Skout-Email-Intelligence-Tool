@@ -4,7 +4,7 @@ export interface VerificationSignals {
 
   smtpValid?: boolean;
 
-  mailboxExists?: boolean;
+  mailboxExists?: boolean | null;
 
   provider?: string;
 

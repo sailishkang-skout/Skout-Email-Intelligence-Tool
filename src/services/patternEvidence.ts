@@ -79,7 +79,7 @@ export interface PatternEvidenceInput {
 
   smtpValid: boolean;
 
-  mailboxExists: boolean;
+  mailboxExists: boolean | null;
 
   responseCode: number | null;
 
@@ -329,7 +329,7 @@ interface NormalizedPatternEvidenceInput {
 
   smtpValid: boolean;
 
-  mailboxExists: boolean;
+  mailboxExists: boolean | null;
 
   responseCode: number | null;
 
@@ -408,7 +408,8 @@ function normalizeInput(
   }
 
   if (
-    typeof input.mailboxExists !== "boolean"
+    typeof input.mailboxExists !== "boolean" &&
+    input.mailboxExists !== null
   ) {
     return {
       valid: false,

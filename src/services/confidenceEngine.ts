@@ -17,7 +17,7 @@ export type ConfidenceStatus =
 export interface ConfidenceEvidenceInput {
   mxAvailable: boolean;
   smtpValid: boolean;
-  mailboxExists: boolean;
+  mailboxExists: boolean | null;
   responseCode: number | null;
 
   catchAll: boolean;
@@ -417,7 +417,7 @@ function getConfidenceStatus(
 
   if (
     input.retryRequired &&
-    !input.mailboxExists
+    input.mailboxExists === false
   ) {
     return "TEMPORARY_FAILURE";
   }
@@ -426,14 +426,14 @@ function getConfidenceStatus(
   input.responseCode !== null &&
   input.responseCode >= 500 &&
   input.responseCode < 600 &&
-  !input.mailboxExists
+  input.mailboxExists === false
 ) {
 
   return "INVALID";
 }
 
   if (
-    input.mailboxExists &&
+    input.mailboxExists === true &&
     input.smtpValid &&
     score >= 80
   ) {
@@ -441,7 +441,7 @@ function getConfidenceStatus(
   }
 
   if (
-    input.mailboxExists &&
+    input.mailboxExists === true &&
     input.smtpValid &&
     score >= 60
   ) {
@@ -484,7 +484,7 @@ export function calculateEvidenceConfidence(
         : 0;
 
   const mailbox =
-  input.mailboxExists
+  input.mailboxExists === true
     ? 35
     : (
         input.responseCode !== null &&
@@ -492,7 +492,7 @@ export function calculateEvidenceConfidence(
         input.responseCode < 600
       )
         ? 25
-        : -10;
+        : 0;
 
   const catchAll =
     calculateCatchAllPenalty(
@@ -565,7 +565,7 @@ not probability the mailbox exists.
     input.responseCode !== null &&
     input.responseCode >= 500 &&
     input.responseCode < 600 &&
-    !input.mailboxExists
+    input.mailboxExists === false
   ){
 
     score = 95;

@@ -150,7 +150,7 @@ export interface VerificationStatusInput {
   ------------------------------------------
   */
 
-  mailboxExists: boolean;
+  mailboxExists: boolean | null;
 
   smtpValid: boolean;
 

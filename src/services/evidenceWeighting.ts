@@ -56,7 +56,7 @@ export interface EvidenceWeightInput {
 
   smtpValid:boolean;
 
-  mailboxExists:boolean;
+  mailboxExists:boolean|null;
 
   catchAll:boolean;
 
@@ -385,7 +385,7 @@ export function calculateEvidenceWeights(
   ==========================================
   */
 
-  if(input.mailboxExists){
+  if(input.mailboxExists === true){
 
     addEvidence(
 
@@ -399,7 +399,11 @@ export function calculateEvidenceWeights(
 
     );
 
-  }else{
+  }else if(
+    input.responseCode!==null &&
+    input.responseCode>=500 &&
+    input.responseCode<600
+  ){
 
     addEvidence(
 
@@ -407,7 +411,7 @@ export function calculateEvidenceWeights(
 
       "MAILBOX_MISSING",
 
-      "Mailbox does not exist.",
+      "SMTP server definitively rejected the mailbox.",
 
       -35
 

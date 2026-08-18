@@ -2,7 +2,7 @@ export interface ReasonInput {
 
   smtpValid?: boolean;
 
-  mailboxExists?: boolean;
+  mailboxExists?: boolean | null;
 
   provider?: string;
 

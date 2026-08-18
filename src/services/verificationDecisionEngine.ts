@@ -42,7 +42,7 @@ export interface VerificationDecisionInput {
 
   smtpValid:boolean;
 
-  mailboxExists:boolean;
+  mailboxExists:boolean|null;
 
   responseCode:number | null;
 
@@ -423,7 +423,7 @@ if(
 
     input.responseCode >= 500 &&
 
-    !input.mailboxExists
+    input.mailboxExists === false
 
   ){
 
@@ -478,7 +478,7 @@ if(
 
  if (
   input.smtpValid &&
-  input.mailboxExists &&
+  input.mailboxExists === true &&
   input.confidenceScore >= 80
 ) {
 

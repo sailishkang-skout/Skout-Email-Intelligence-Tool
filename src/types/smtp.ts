@@ -4,7 +4,7 @@ export interface NormalizedSMTPResult {
 
   responseMessage:string|null;
 
-  mailboxExists:boolean;
+  mailboxExists:boolean|null;
 
   smtpValid:boolean;
 
