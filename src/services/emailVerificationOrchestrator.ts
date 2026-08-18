@@ -378,6 +378,8 @@ function buildRecommendation(
 
     retryRequired:boolean;
 
+    responseCode:number|null;
+
   }
 
 ):VerifyEmailResult["intelligence"]["recommendation"] {
@@ -1265,7 +1267,10 @@ const recommendation =
     catchAll,
 
     retryRequired:
-      smtp.retryRequired
+      smtp.retryRequired,
+
+    responseCode:
+      smtp.responseCode
 
   });
 
