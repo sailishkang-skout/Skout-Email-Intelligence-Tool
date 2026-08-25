@@ -331,7 +331,45 @@ export async function appendEvidence(
     ]
   );
 
+  // Optional forward into Skout canonical Evidence Ledger (§5.3 merge).
+  // Set SKOUT_CANONICAL_EVIDENCE_URL + SKOUT_CANONICAL_EVIDENCE_TOKEN (+ optional workspace via header).
+  void forwardToCanonicalLedger(record).catch(() => undefined);
+
   return record;
+}
+
+async function forwardToCanonicalLedger(record: EvidenceLedgerRecord): Promise<void> {
+  const url = process.env.SKOUT_CANONICAL_EVIDENCE_URL?.trim();
+  const token = process.env.SKOUT_CANONICAL_EVIDENCE_TOKEN?.trim();
+  if (!url || !token) return;
+
+  await fetch(url.replace(/\/$/, "") + "/api/v1/evidence/ingest/email-intel", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+    },
+    body: JSON.stringify({
+      email: record.email,
+      domain: record.domain,
+      source: record.source,
+      outcome: record.outcome,
+      responseCode: record.responseCode,
+      responseMessage: record.responseMessage,
+      smtpValid: record.smtpValid,
+      mailboxExists: record.mailboxExists,
+      catchAll: record.catchAll,
+      provider: record.provider,
+      verificationId: record.verificationId,
+      requestId: record.requestId,
+      metadata: record.metadata,
+      rawEvidence: record.rawEvidence,
+      createdAt: record.timestamp,
+      externalId: record.id,
+    }),
+    signal: AbortSignal.timeout(5000),
+  });
 }
 
 /*
