@@ -77,6 +77,9 @@ services:
       STORAGE_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       STORAGE_BUCKET: ${STORAGE_BUCKET:-email-intelligence-artifacts}
       STORAGE_FORCE_PATH_STYLE: "true"
+      # Optional: forward evidence into Skout canonical ledger (§5.3)
+      SKOUT_CANONICAL_EVIDENCE_URL: ${SKOUT_CANONICAL_EVIDENCE_URL:-}
+      SKOUT_CANONICAL_EVIDENCE_TOKEN: ${SKOUT_CANONICAL_EVIDENCE_TOKEN:-}
     ports:
       - "${PORT:-3001}:3001"
     command: ["node", "dist/server.js"]

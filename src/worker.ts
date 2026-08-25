@@ -1,3 +1,4 @@
+import "./load-env.js";
 import "./observability/tracing.js";
 
 import { startVerificationQueueWorker } from "./queue/verificationQueueWorker.js";

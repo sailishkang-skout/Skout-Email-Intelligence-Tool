@@ -1,3 +1,4 @@
+import "./load-env.js";
 import "./observability/tracing.js";
 
 import { runMigrations } from "./database/migrations.js";
