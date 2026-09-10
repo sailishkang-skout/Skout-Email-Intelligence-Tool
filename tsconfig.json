@@ -22,6 +22,8 @@
   "include": ["src/**/*.ts"],
   "exclude": [
     "node_modules",
-    "dist"
+    "dist",
+    "test-connection.ts",
+    "tests/**"
   ]
 }

@@ -235,7 +235,7 @@ function normalizeSMTPResult(
 
     mailboxExists:
       typeof value.mailboxExists === "boolean" || value.mailboxExists === null
-        ? value.mailboxExists as boolean | null
+        ? value.mailboxExists
         : null,
 
 
