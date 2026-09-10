@@ -269,19 +269,38 @@ export function getIdempotencyRedisConnection(): Redis {
 
 }
 
-export async function pingRedis(): Promise<boolean> {
+export interface RedisHealthInfo {
+  pingResponse: string;
+  version: string;
+  writeReadTest: boolean;
+}
 
+export async function pingRedis(): Promise<boolean>;
+export async function pingRedis(extended: true): Promise<RedisHealthInfo>;
+export async function pingRedis(extended?: boolean): Promise<boolean | RedisHealthInfo> {
   try {
-
-    const response = await getRedis().ping();
-    return response === "PONG";
-
+    const redis = getRedis();
+    const pingResponse = await redis.ping();
+    
+    if (extended) {
+      const info = await redis.info("server");
+      const redisVersion = info.match(/redis_version:(\S+)/)?.[1] || "unknown";
+      
+      // Test write/read
+      await redis.set("skout_health_check", "ok", "EX", 10);
+      const testValue = await redis.get("skout_health_check");
+      
+      return {
+        pingResponse,
+        version: redisVersion,
+        writeReadTest: testValue === "ok"
+      };
+    }
+    
+    return pingResponse === "PONG";
   } catch {
-
     return false;
-
   }
-
 }
 
 export async function closeRedis(): Promise<void> {

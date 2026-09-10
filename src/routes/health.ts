@@ -2,8 +2,8 @@ import type {
   FastifyInstance,
 } from "fastify";
 
-import { pingDatabase } from "../database/database.js";
-import { pingRedis } from "../redis/redisClient.js";
+import { pingDatabase, type DatabaseHealthInfo } from "../database/database.js";
+import { pingRedis, type RedisHealthInfo } from "../redis/redisClient.js";
 import { getQueueCounts } from "../queue/verificationQueue.js";
 import { pingStorage } from "../storage/storageProvider.js";
 import { getOutboxSummary, type OutboxSummary } from "../services/verificationJobService.js";
@@ -58,6 +58,7 @@ interface HealthCheckResult {
   status: "ok" | "error";
   latencyMs: number;
   error?: string;
+  details?: DatabaseHealthInfo | RedisHealthInfo;
 }
 
 /*
@@ -105,10 +106,12 @@ async function checkDatabase(): Promise<HealthCheckResult> {
   const start = Date.now();
 
   try {
-    const ok = await withTimeout(pingDatabase(), DATABASE_CHECK_TIMEOUT_MS, "Database ping");
-    return ok
-      ? { status: "ok", latencyMs: Date.now() - start }
-      : { status: "error", latencyMs: Date.now() - start, error: "PostgreSQL unreachable" };
+   const dbInfo = await withTimeout(pingDatabase(true), DATABASE_CHECK_TIMEOUT_MS, "Database ping");
+     return { 
+       status: "ok", 
+       latencyMs: Date.now() - start,
+       details: dbInfo
+     };
   } catch (error: unknown) {
     return { status: "error", latencyMs: Date.now() - start, error: extractErrorMessage(error) };
   }
@@ -118,10 +121,12 @@ async function checkRedis(): Promise<HealthCheckResult> {
   const start = Date.now();
 
   try {
-    const ok = await withTimeout(pingRedis(), REDIS_CHECK_TIMEOUT_MS, "Redis ping");
-    return ok
-      ? { status: "ok", latencyMs: Date.now() - start }
-      : { status: "error", latencyMs: Date.now() - start, error: "Redis unreachable" };
+   const redisInfo = await withTimeout(pingRedis(true), REDIS_CHECK_TIMEOUT_MS, "Redis ping");
+     return { 
+       status: "ok", 
+       latencyMs: Date.now() - start,
+       details: redisInfo
+     };
   } catch (error: unknown) {
     return { status: "error", latencyMs: Date.now() - start, error: extractErrorMessage(error) };
   }

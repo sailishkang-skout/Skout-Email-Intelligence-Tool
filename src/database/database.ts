@@ -48,9 +48,34 @@ export async function closeDatabase(): Promise<void> {
   await pool.end();
 }
 
-export async function pingDatabase(): Promise<boolean> {
+export interface DatabaseHealthInfo {
+  currentUser: string;
+  currentDatabase: string;
+  version: string;
+  serverTime: string;
+}
+
+export async function pingDatabase(): Promise<boolean>;
+export async function pingDatabase(extended: true): Promise<DatabaseHealthInfo>;
+export async function pingDatabase(extended?: boolean): Promise<boolean | DatabaseHealthInfo> {
   try {
-    await pool.query("SELECT 1");
+    const result = await pool.query(`
+      SELECT 
+        current_user, 
+        current_database,
+        version(),
+        NOW() as current_time
+    `);
+    
+    if (extended) {
+      return {
+        currentUser: result.rows[0].current_user,
+        currentDatabase: result.rows[0].current_database,
+        version: result.rows[0].version.split(" ")[0],
+        serverTime: result.rows[0].current_time
+      };
+    }
+    
     return true;
   } catch {
     return false;

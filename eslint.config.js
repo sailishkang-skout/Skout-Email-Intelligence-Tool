@@ -8,6 +8,14 @@ export default tseslint.config(
     ignores: ["dist/**", "node_modules/**", "eslint.config.js"],
   },
   {
+    files: ["test-connection.ts", "tests/**/*.ts"],
+    languageOptions: {
+      parserOptions: {
+        projectService: false,
+      },
+    }
+  },
+  {
     languageOptions: {
       parserOptions: {
         projectService: true,

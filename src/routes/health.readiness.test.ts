@@ -24,13 +24,38 @@ let redisOk = true;
 
 mock.module("../database/database.js", {
   namedExports: {
-    pingDatabase: async () => databaseOk,
+    pingDatabase: async (extended?: boolean) => {
+      if (!databaseOk) {
+        throw new Error("Database is down");
+      }
+      if (extended) {
+        return {
+          currentUser: "test",
+          currentDatabase: "test",
+          version: "14.0",
+          serverTime: new Date().toISOString()
+        };
+      }
+      return true;
+    },
   },
 });
 
 mock.module("../redis/redisClient.js", {
   namedExports: {
-    pingRedis: async () => redisOk,
+    pingRedis: async (extended?: boolean) => {
+      if (!redisOk) {
+        throw new Error("Redis is down");
+      }
+      if (extended) {
+        return {
+          pingResponse: "PONG",
+          version: "7.0",
+          writeReadTest: true
+        };
+      }
+      return true;
+    },
   },
 });
 
