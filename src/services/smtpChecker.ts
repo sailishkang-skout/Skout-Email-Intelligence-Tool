@@ -9,6 +9,10 @@ export interface SMTPVerificationResult {
   transcript: string[];
   mxHost: string;
   durationMs: number;
+  provider: "SMTP_POOL";
+  retryRequired: boolean;
+  retryReason: string | null;
+  error: string | null;
 }
 
 export async function verifySMTP(
@@ -39,7 +43,11 @@ export async function verifySMTP(
       ],
       mxHost: normalizedMX,
       durationMs:
-        Date.now() - started
+        Date.now() - started,
+      provider: "SMTP_POOL",
+      retryRequired: false,
+      retryReason: null,
+      error: "Email is required"
     };
   }
 
@@ -56,7 +64,11 @@ export async function verifySMTP(
       ],
       mxHost: normalizedMX,
       durationMs:
-        Date.now() - started
+        Date.now() - started,
+      provider: "SMTP_POOL",
+      retryRequired: false,
+      retryReason: null,
+      error: "MX host is required"
     };
   }
 
@@ -93,6 +105,10 @@ export async function verifySMTP(
       responseCode >= 200 &&
       responseCode < 300;
 
+    const retryRequired =
+      responseCode === null ||
+      (responseCode >= 400 && responseCode < 500);
+
     return {
       success: true,
       smtpValid,
@@ -106,7 +122,14 @@ export async function verifySMTP(
       ],
       mxHost: normalizedMX,
       durationMs:
-        Date.now() - started
+        Date.now() - started,
+      provider: "SMTP_POOL",
+      retryRequired,
+      retryReason:
+        retryRequired
+          ? responseMessage || "SMTP server returned a temporary response"
+          : null,
+      error: null
     };
   } catch (error: unknown) {
     const message =
@@ -126,7 +149,11 @@ export async function verifySMTP(
       ],
       mxHost: normalizedMX,
       durationMs:
-        Date.now() - started
+        Date.now() - started,
+      provider: "SMTP_POOL",
+      retryRequired: true,
+      retryReason: message,
+      error: message
     };
   }
 }
