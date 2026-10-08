@@ -296,6 +296,68 @@ function normalizeSMTPResult(
 }
 /*
 ==================================================
+MX FALLBACK
+==================================================
+*/
+
+/*
+Tries MX hosts in DNS preference order (getMX() already sorts ascending by
+priority, most preferred first) and returns the first result that represents
+a genuine SMTP response — not just the top-priority host succeeding.
+
+Falls back to the next host only when the current one could not be reached
+at all (connection refused/timed out, DNS failure, banner/command timeout —
+i.e. normalized.error is set). A 4xx from a host we DID reach is a temporary
+answer from that specific host (greylisting and similar) and belongs to the
+existing retry scheduler, not a reason to probe a different MX.
+
+Bounded to the first `maxHosts` by preference (default 3) so a domain with
+many MX records can't multiply worst-case verification latency unboundedly;
+in practice almost every domain has 1-4 MX records.
+
+`verify` is injectable so this can be unit-tested without a real network
+call — see emailVerificationOrchestrator.mxFallback.test.ts.
+*/
+export async function verifySMTPWithFallback(
+  email: string,
+  hosts: string[],
+  verify: typeof verifySMTP = verifySMTP,
+  maxHosts = 3
+): Promise<NormalizedSMTPResult | null> {
+
+  let normalized: NormalizedSMTPResult | null =
+    null;
+
+  for (
+    const host of hosts.slice(0, maxHosts)
+  ) {
+
+    const result =
+      await verify(
+        email,
+        host
+      );
+
+    normalized =
+      normalizeSMTPResult(
+        result
+      );
+
+    if (
+      normalized.error === null
+    ) {
+
+      break;
+
+    }
+
+  }
+
+  return normalized;
+
+}
+/*
+==================================================
 CATCH ALL NORMALIZER
 ==================================================
 */
@@ -783,18 +845,15 @@ await verificationEventRepository.createEvent({
       smtp.primaryMX
     ){
 
-      const result =
-  await verifySMTP(
-    email,
-    smtp.primaryMX
-  );
-
       const normalized =
-        normalizeSMTPResult(
-          result
+        await verifySMTPWithFallback(
+          email,
+          mxHosts
         );
 
-
+      if (
+        normalized
+      ) {
 
       smtp =
       {
@@ -811,6 +870,8 @@ await verificationEventRepository.createEvent({
         mxAvailable:true
 
       };
+
+      }
 
 
 
